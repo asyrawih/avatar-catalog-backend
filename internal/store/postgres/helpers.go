@@ -61,16 +61,6 @@ func ensurePlayer(ctx context.Context, tx pgx.Tx, userID int64) error {
 	return err
 }
 
-// nullableID mengubah id kosong menjadi NULL supaya foreign key opsional tidak
-// menunjuk baris yang tidak ada. catalog_item.creator_id memang boleh kosong:
-// penerbitnya baru diketahui saat sync worker mengisi item.
-func nullableID(id int64) *int64 {
-	if id <= 0 {
-		return nil
-	}
-	return &id
-}
-
 // tagsOrEmpty menjaga kolom jsonb selalu berisi array, bukan null.
 func tagsOrEmpty(tags []string) []string {
 	if tags == nil {

@@ -252,8 +252,6 @@ Yang masih harus dikerjakan: verifikasi identitas pemain sungguhan
 | `SEED_DATA` | `true` | Data contoh untuk mode in-memory; diabaikan bila `DATABASE_URL` diisi |
 | `AUTH_TOKENS` | kosong | Daftar Bearer token layanan, dipisah koma |
 | `IDEMPOTENCY_TTL` | `24h` | Umur simpan hasil POST per kunci |
-| `SYNC_RUN_LIMIT` | `5` | Jumlah laporan sync per jendela |
-| `SYNC_RUN_WINDOW` | `1m` | Panjang jendela pembatas |
 | `SHUTDOWN_TIMEOUT` | `10s` | Batas waktu shutdown yang rapi |
 | `POSTGRES_DB` | `avatar_catalog` | Nama database (service `db`) |
 | `POSTGRES_USER` | `avatar` | User database |

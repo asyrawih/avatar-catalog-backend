@@ -39,10 +39,6 @@ type Config struct {
 	// IdempotencyTTL adalah umur simpan hasil POST per Idempotency-Key.
 	IdempotencyTTL time.Duration
 
-	// SyncRunLimit dan SyncRunWindow membatasi laporan sync per source.
-	SyncRunLimit  int
-	SyncRunWindow time.Duration
-
 	// AuthTokens adalah daftar Bearer token layanan yang diterima. Kosong
 	// berarti autentikasi belum diaktifkan.
 	AuthTokens []string
@@ -59,14 +55,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	idempotencyTTL, err := envDuration("IDEMPOTENCY_TTL", 24*time.Hour)
-	if err != nil {
-		return Config{}, err
-	}
-	syncLimit, err := envInt("SYNC_RUN_LIMIT", 5)
-	if err != nil {
-		return Config{}, err
-	}
-	syncWindow, err := envDuration("SYNC_RUN_WINDOW", time.Minute)
 	if err != nil {
 		return Config{}, err
 	}
@@ -109,16 +97,11 @@ func Load() (Config, error) {
 
 		SeedData:       seed,
 		IdempotencyTTL: idempotencyTTL,
-		SyncRunLimit:   syncLimit,
-		SyncRunWindow:  syncWindow,
 		AuthTokens:     envList("AUTH_TOKENS"),
 	}
 
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return Config{}, fmt.Errorf("config: PORT %d di luar rentang", cfg.Port)
-	}
-	if cfg.SyncRunLimit < 1 {
-		return Config{}, fmt.Errorf("config: SYNC_RUN_LIMIT harus minimal 1")
 	}
 	return cfg, nil
 }

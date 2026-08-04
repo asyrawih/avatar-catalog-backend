@@ -1,4 +1,4 @@
-﻿package cached_test
+package cached_test
 
 import (
 	"context"
