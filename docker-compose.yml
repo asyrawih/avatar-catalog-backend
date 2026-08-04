@@ -1,0 +1,83 @@
+name: avatar-catalog
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-avatar_catalog}
+      POSTGRES_USER: ${POSTGRES_USER:-avatar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-avatar_dev_password}
+      # Bikin initdb tegas soal encoding dan collation supaya urutan teks sama
+      # di semua mesin developer.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Skrip di sini hanya jalan saat volume masih kosong. Untuk memuat ulang
+      # skema: docker compose down -v && docker compose up.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-avatar} -d ${POSTGRES_DB:-avatar_catalog}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    # Cache boleh hilang kapan saja, jadi persistensi dimatikan dan memori
+    # dibatasi: begitu penuh, kunci paling jarang dipakai dibuang sendiri.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory ${REDIS_MAXMEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://${POSTGRES_USER:-avatar}:${POSTGRES_PASSWORD:-avatar_dev_password}@db:5432/${POSTGRES_DB:-avatar_catalog}?sslmode=disable
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-10}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_TTL: ${CACHE_TTL:-1m}
+      CACHE_PREFIX: ${CACHE_PREFIX:-avatar-catalog}
+      AUTH_TOKENS: ${AUTH_TOKENS:-}
+    ports:
+      - "${PORT:-8080}:8080"
+
+  # Profil tools: `docker compose --profile tools up` kalau butuh lihat isi tabel.
+  adminer:
+    image: adminer:5
+    profiles: [tools]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+
+volumes:
+  pgdata:
