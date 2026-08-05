@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-avatar_catalog}
       POSTGRES_USER: ${POSTGRES_USER:-avatar}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-avatar_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kelasmalam}
       # Bikin initdb tegas soal encoding dan collation supaya urutan teks sama
       # di semua mesin developer.
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"

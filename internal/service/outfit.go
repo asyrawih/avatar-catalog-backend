@@ -55,6 +55,7 @@ type CreateOutfitInput struct {
 	IsPublic   bool
 	CustomTags []string
 	Items      []model.OutfitItem
+	Body       *model.AvatarBody // opsional
 }
 
 // UpdateOutfitInput adalah muatan PATCH /v1/outfits/{outfitId}; field nil
@@ -152,6 +153,10 @@ func (s *Outfits) Create(ctx context.Context, in CreateOutfitInput) (model.Outfi
 	if err := s.validateItems(in.Items); err != nil {
 		return model.Outfit{}, err
 	}
+	body, err := normalizeBody(in.Body)
+	if err != nil {
+		return model.Outfit{}, err
+	}
 
 	now := s.now()
 	outfit := model.Outfit{
@@ -163,6 +168,7 @@ func (s *Outfits) Create(ctx context.Context, in CreateOutfitInput) (model.Outfi
 		IsPublic:    in.IsPublic,
 		CustomTags:  in.CustomTags,
 		Items:       in.Items,
+		Body:        body,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -355,17 +361,19 @@ func (s *Outfits) ensureTemplate(ctx context.Context, templateID string) error {
 	return err
 }
 
-// validateItems memeriksa jumlah, bentrok slot, dan bentuk detail item.
+// validateItems memeriksa jumlah dan bentuk detail item.
 //
 // Yang tidak diperiksa: apakah assetId-nya benar-benar ada di Roblox. Backend
 // tidak lagi menyimpan katalog, jadi satu-satunya yang tahu itu adalah klien —
 // dan menebaknya di sini hanya akan menolak item yang sah.
+//
+// Slot ganda juga tidak ditolak. Klien yang tahu apakah dua asset benar-benar
+// bentrok di rig; slot di sini cuma label yang dilaporkan klien.
 func (s *Outfits) validateItems(items []model.OutfitItem) error {
 	if len(items) > MaxOutfitItems {
 		return apierr.Unprocessable("too_many_items", fmt.Sprintf("Maksimum %d item per outfit", MaxOutfitItems))
 	}
 
-	bySlot := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		if strings.TrimSpace(item.Slot) == "" {
 			return apierr.Unprocessable("missing_slot", "Setiap item wajib punya slot")
@@ -373,10 +381,6 @@ func (s *Outfits) validateItems(items []model.OutfitItem) error {
 		if item.AssetID <= 0 {
 			return apierr.Unprocessable("invalid_asset_id", "Setiap item wajib punya assetId")
 		}
-		if _, dup := bySlot[item.Slot]; dup {
-			return apierr.Conflict("duplicate_slot", fmt.Sprintf("Slot %s terisi lebih dari satu asset", item.Slot))
-		}
-		bySlot[item.Slot] = struct{}{}
 
 		if len(strings.TrimSpace(item.Name)) > MaxItemNameLen {
 			return apierr.Unprocessable("invalid_item_name",
@@ -392,6 +396,114 @@ func (s *Outfits) validateItems(items []model.OutfitItem) error {
 	}
 	return nil
 }
+
+// normalizeBody memeriksa warna dan skala tubuh, lalu mengembalikan salinan
+// yang sudah dirapikan.
+//
+// Yang tidak diperiksa: apakah skalanya masuk rentang yang diterima Roblox.
+// Rentang itu bergeser antar rig dan antar rilis, jadi menebaknya di sini hanya
+// akan menolak avatar yang sah — sama alasannya dengan assetId item. Yang
+// ditolak hanya nilai yang tidak mungkin benar dan pasti bikin render gagal.
+func normalizeBody(body *model.AvatarBody) (*model.AvatarBody, error) {
+	if body == nil {
+		return nil, nil
+	}
+
+	out := model.AvatarBody{}
+
+	if body.Colors != nil {
+		colors := *body.Colors
+		parts := []struct {
+			field string
+			value *string
+		}{
+			{"head", &colors.Head},
+			{"torso", &colors.Torso},
+			{"leftArm", &colors.LeftArm},
+			{"rightArm", &colors.RightArm},
+			{"leftLeg", &colors.LeftLeg},
+			{"rightLeg", &colors.RightLeg},
+		}
+		for _, part := range parts {
+			normalized, err := normalizeHexColor(*part.value)
+			if err != nil {
+				return nil, apierr.Unprocessable("invalid_body_color",
+					fmt.Sprintf("body.colors.%s harus hex RGB 6 digit", part.field)).
+					WithDetails(map[string]any{
+						"field": "body.colors." + part.field,
+						"value": *part.value,
+					})
+			}
+			*part.value = normalized
+		}
+		out.Colors = &colors
+	}
+
+	if body.Scales != nil {
+		scales := *body.Scales
+		// Height/width/head/depth adalah pengali: nol berarti anggota badan
+		// menghilang, dan itu selalu salah kirim — biasanya karena field-nya
+		// lupa diisi, bukan karena benar-benar diinginkan.
+		positive := []struct {
+			field string
+			value float64
+		}{
+			{"height", scales.Height},
+			{"width", scales.Width},
+			{"head", scales.Head},
+			{"depth", scales.Depth},
+		}
+		for _, s := range positive {
+			if s.value <= 0 {
+				return nil, apierr.Unprocessable("invalid_body_scale",
+					fmt.Sprintf("body.scales.%s harus lebih besar dari nol", s.field)).
+					WithDetails(map[string]any{"field": "body.scales." + s.field, "value": s.value})
+			}
+		}
+		// BodyType dan proportion adalah bobot; nol adalah nilai wajarnya.
+		weights := []struct {
+			field string
+			value float64
+		}{
+			{"bodyType", scales.BodyType},
+			{"proportion", scales.Proportion},
+		}
+		for _, s := range weights {
+			if s.value < 0 {
+				return nil, apierr.Unprocessable("invalid_body_scale",
+					fmt.Sprintf("body.scales.%s tidak boleh negatif", s.field)).
+					WithDetails(map[string]any{"field": "body.scales." + s.field, "value": s.value})
+			}
+		}
+		out.Scales = &scales
+	}
+
+	// body: {} tidak membawa informasi apa pun; simpan sebagai tidak dilaporkan
+	// supaya tidak ada dua bentuk berbeda untuk keadaan yang sama.
+	if out.Colors == nil && out.Scales == nil {
+		return nil, nil
+	}
+	return &out, nil
+}
+
+// normalizeHexColor menerima "AE7C64" maupun "#AE7C64" dan mengembalikannya
+// tanpa '#'. Besar-kecil huruf dibiarkan seperti yang dikirim klien.
+func normalizeHexColor(value string) (string, error) {
+	hex := strings.TrimPrefix(strings.TrimSpace(value), "#")
+	if len(hex) != 6 {
+		return "", errInvalidHex
+	}
+	for _, r := range hex {
+		isDigit := r >= '0' && r <= '9'
+		isHexLetter := (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isDigit && !isHexLetter {
+			return "", errInvalidHex
+		}
+	}
+	return hex, nil
+}
+
+var errInvalidHex = errors.New("bukan hex RGB 6 digit")
 
 // validateCustomTags menolak tag yang mengandung koma, karena tag dikirim ke
 // RegisterItemAsync sebagai satu string dipisah koma dan akan terpecah salah.

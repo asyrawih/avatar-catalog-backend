@@ -296,6 +296,18 @@ func cloneOutfit(o model.Outfit) model.Outfit {
 		recoItemID := *o.RecoItemID
 		clone.RecoItemID = &recoItemID
 	}
+	if o.Body != nil {
+		body := *o.Body
+		if o.Body.Colors != nil {
+			colors := *o.Body.Colors
+			body.Colors = &colors
+		}
+		if o.Body.Scales != nil {
+			scales := *o.Body.Scales
+			body.Scales = &scales
+		}
+		clone.Body = &body
+	}
 	return clone
 }
 

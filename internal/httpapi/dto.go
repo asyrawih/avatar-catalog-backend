@@ -23,14 +23,23 @@ func newListEnvelope(data any, nextCursor string, hasMore bool) listEnvelope {
 
 // --- outfit ---------------------------------------------------------------
 
+// outfitSummaryDTO membawa itemnya sekalian. Penyimpanan sudah mengambil item
+// satu halaman penuh dalam satu query, jadi menyertakannya di sini tidak
+// menambah pukulan ke database — dan klien tidak perlu menyusul GET detail per
+// outfit hanya untuk tahu isinya.
+//
+// itemCount dipertahankan supaya klien yang cuma butuh jumlah tidak ikut
+// berubah.
 type outfitSummaryDTO struct {
-	OutfitID    string    `json:"outfitId"`
-	ReferenceID string    `json:"referenceId"`
-	Name        string    `json:"name"`
-	TemplateID  string    `json:"templateId"`
-	IsPublic    bool      `json:"isPublic"`
-	ItemCount   int       `json:"itemCount"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	OutfitID    string          `json:"outfitId"`
+	ReferenceID string          `json:"referenceId"`
+	Name        string          `json:"name"`
+	TemplateID  string          `json:"templateId"`
+	IsPublic    bool            `json:"isPublic"`
+	ItemCount   int             `json:"itemCount"`
+	Items       []outfitItemDTO `json:"items"`
+	Body        *avatarBodyDTO  `json:"body"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
 }
 
 func newOutfitSummary(o model.Outfit) outfitSummaryDTO {
@@ -41,6 +50,8 @@ func newOutfitSummary(o model.Outfit) outfitSummaryDTO {
 		TemplateID:  o.TemplateID,
 		IsPublic:    o.IsPublic,
 		ItemCount:   len(o.Items),
+		Items:       newOutfitItems(o.Items),
+		Body:        newAvatarBody(o.Body),
 		UpdatedAt:   o.UpdatedAt,
 	}
 }
@@ -51,6 +62,62 @@ func newOutfitSummaries(outfits []model.Outfit) []outfitSummaryDTO {
 		out = append(out, newOutfitSummary(o))
 	}
 	return out
+}
+
+// avatarBodyDTO adalah warna dan skala tubuh. Bentuknya sama dengan yang
+// diterima POST /v1/outfits, jadi hasil GET bisa dikirim balik apa adanya.
+type avatarBodyDTO struct {
+	Colors *bodyColorsDTO `json:"colors"`
+	Scales *bodyScalesDTO `json:"scales"`
+}
+
+type bodyColorsDTO struct {
+	Head     string `json:"head"`
+	Torso    string `json:"torso"`
+	LeftArm  string `json:"leftArm"`
+	RightArm string `json:"rightArm"`
+	LeftLeg  string `json:"leftLeg"`
+	RightLeg string `json:"rightLeg"`
+}
+
+type bodyScalesDTO struct {
+	Height     float64 `json:"height"`
+	Width      float64 `json:"width"`
+	Head       float64 `json:"head"`
+	Depth      float64 `json:"depth"`
+	BodyType   float64 `json:"bodyType"`
+	Proportion float64 `json:"proportion"`
+}
+
+// newAvatarBody mengembalikan nil supaya outfit tanpa body terkirim sebagai
+// `"body": null`, bukan objek berisi nol yang terbaca seperti data sungguhan.
+func newAvatarBody(body *model.AvatarBody) *avatarBodyDTO {
+	if body == nil {
+		return nil
+	}
+
+	out := avatarBodyDTO{}
+	if c := body.Colors; c != nil {
+		out.Colors = &bodyColorsDTO{
+			Head:     c.Head,
+			Torso:    c.Torso,
+			LeftArm:  c.LeftArm,
+			RightArm: c.RightArm,
+			LeftLeg:  c.LeftLeg,
+			RightLeg: c.RightLeg,
+		}
+	}
+	if s := body.Scales; s != nil {
+		out.Scales = &bodyScalesDTO{
+			Height:     s.Height,
+			Width:      s.Width,
+			Head:       s.Head,
+			Depth:      s.Depth,
+			BodyType:   s.BodyType,
+			Proportion: s.Proportion,
+		}
+	}
+	return &out
 }
 
 type outfitItemDTO struct {
@@ -71,14 +138,17 @@ type outfitDetailDTO struct {
 	IsPublic    bool            `json:"isPublic"`
 	CustomTags  []string        `json:"customTags"`
 	Items       []outfitItemDTO `json:"items"`
+	Body        *avatarBodyDTO  `json:"body"`
 	CreatedAt   time.Time       `json:"createdAt"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
 }
 
-func newOutfitDetail(o model.Outfit) outfitDetailDTO {
-	items := make([]outfitItemDTO, 0, len(o.Items))
-	for _, item := range o.Items {
-		items = append(items, outfitItemDTO{
+// newOutfitItems selalu mengembalikan slice tidak nil supaya outfit kosong
+// terkirim sebagai `[]`, bukan `null`.
+func newOutfitItems(items []model.OutfitItem) []outfitItemDTO {
+	out := make([]outfitItemDTO, 0, len(items))
+	for _, item := range items {
+		out = append(out, outfitItemDTO{
 			AssetID:   item.AssetID,
 			Slot:      item.Slot,
 			Name:      item.Name,
@@ -86,7 +156,10 @@ func newOutfitDetail(o model.Outfit) outfitDetailDTO {
 			Price:     item.Price,
 		})
 	}
+	return out
+}
 
+func newOutfitDetail(o model.Outfit) outfitDetailDTO {
 	return outfitDetailDTO{
 		OutfitID:    o.OutfitID,
 		ReferenceID: o.ReferenceID,
@@ -96,7 +169,8 @@ func newOutfitDetail(o model.Outfit) outfitDetailDTO {
 		Name:        o.Name,
 		IsPublic:    o.IsPublic,
 		CustomTags:  o.CustomTags,
-		Items:       items,
+		Items:       newOutfitItems(o.Items),
+		Body:        newAvatarBody(o.Body),
 		CreatedAt:   o.CreatedAt,
 		UpdatedAt:   o.UpdatedAt,
 	}

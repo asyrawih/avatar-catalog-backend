@@ -27,6 +27,34 @@ type outfitItemBody struct {
 	Price     int    `json:"price"`
 }
 
+// avatarBodyBody menerima bentuk body yang sama persis dengan yang dikeluarkan
+// GET /v1/outfits/{outfitId}, jadi hasil GET bisa dikirim balik apa adanya.
+//
+// colors dan scales dua-duanya opsional; body yang tidak dikirim sama sekali
+// berarti klien tidak melaporkannya.
+type avatarBodyBody struct {
+	Colors *bodyColorsBody `json:"colors"`
+	Scales *bodyScalesBody `json:"scales"`
+}
+
+type bodyColorsBody struct {
+	Head     string `json:"head"`
+	Torso    string `json:"torso"`
+	LeftArm  string `json:"leftArm"`
+	RightArm string `json:"rightArm"`
+	LeftLeg  string `json:"leftLeg"`
+	RightLeg string `json:"rightLeg"`
+}
+
+type bodyScalesBody struct {
+	Height     float64 `json:"height"`
+	Width      float64 `json:"width"`
+	Head       float64 `json:"head"`
+	Depth      float64 `json:"depth"`
+	BodyType   float64 `json:"bodyType"`
+	Proportion float64 `json:"proportion"`
+}
+
 type createOutfitBody struct {
 	UserID int64 `json:"userId"`
 	// templateId adalah Roblox asset id rig; boleh dikirim sebagai string
@@ -36,6 +64,7 @@ type createOutfitBody struct {
 	IsPublic   bool             `json:"isPublic"`
 	CustomTags []string         `json:"customTags"`
 	Items      []outfitItemBody `json:"items"`
+	Body       *avatarBodyBody  `json:"body"`
 }
 
 type updateOutfitBody struct {
@@ -66,6 +95,35 @@ func toModelItems(items []outfitItemBody) []model.OutfitItem {
 		})
 	}
 	return out
+}
+
+func toModelBody(body *avatarBodyBody) *model.AvatarBody {
+	if body == nil {
+		return nil
+	}
+
+	out := model.AvatarBody{}
+	if c := body.Colors; c != nil {
+		out.Colors = &model.BodyColors{
+			Head:     c.Head,
+			Torso:    c.Torso,
+			LeftArm:  c.LeftArm,
+			RightArm: c.RightArm,
+			LeftLeg:  c.LeftLeg,
+			RightLeg: c.RightLeg,
+		}
+	}
+	if s := body.Scales; s != nil {
+		out.Scales = &model.BodyScales{
+			Height:     s.Height,
+			Width:      s.Width,
+			Head:       s.Head,
+			Depth:      s.Depth,
+			BodyType:   s.BodyType,
+			Proportion: s.Proportion,
+		}
+	}
+	return &out
 }
 
 // --- handler --------------------------------------------------------------
@@ -124,6 +182,7 @@ func (h *outfitHandler) create(w http.ResponseWriter, r *http.Request) {
 		IsPublic:   body.IsPublic,
 		CustomTags: body.CustomTags,
 		Items:      toModelItems(body.Items),
+		Body:       toModelBody(body.Body),
 	})
 	if err != nil {
 		writeError(w, err)

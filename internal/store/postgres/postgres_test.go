@@ -82,6 +82,17 @@ func sampleOutfit(id, referenceID string, updatedAt time.Time) model.Outfit {
 			{AssetID: 78872304386489, Slot: "Hair", Name: "BLOND BARREL TWISTS DREADS", AssetType: "HairAccessory", Price: 69},
 			{AssetID: 14433369343, Slot: "Jacket", Name: "Hero Jacket Oni Blood Moon", AssetType: "Accessory", Price: 79},
 		},
+		Body: &model.AvatarBody{
+			Colors: &model.BodyColors{
+				Head: "AE7C64", Torso: "AE7C64",
+				LeftArm: "AE7C64", RightArm: "AE7C64",
+				LeftLeg: "AE7C64", RightLeg: "AE7C64",
+			},
+			Scales: &model.BodyScales{
+				Height: 1.0499999523162842, Width: 1, Head: 1,
+				Depth: 1, BodyType: 1, Proportion: 0,
+			},
+		},
 		CreatedAt: updatedAt,
 		UpdatedAt: updatedAt,
 	}
@@ -122,6 +133,43 @@ func TestOutfitTulisLaluBaca(t *testing.T) {
 	}
 	if got.Deleted() {
 		t.Error("outfit baru sudah bertanda terhapus")
+	}
+
+	// OUTFIT.body adalah jsonb; yang diuji di sini bahwa isinya kembali utuh,
+	// termasuk pecahan skala yang tidak boleh dibulatkan.
+	if got.Body == nil || got.Body.Colors == nil || got.Body.Scales == nil {
+		t.Fatalf("body = %+v, ingin colors dan scales ikut terbaca", got.Body)
+	}
+	if got.Body.Colors.Head != "AE7C64" || got.Body.Colors.RightLeg != "AE7C64" {
+		t.Errorf("body.colors = %+v", *got.Body.Colors)
+	}
+	if got.Body.Scales.Height != want.Body.Scales.Height {
+		t.Errorf("body.scales.height = %v, ingin %v", got.Body.Scales.Height, want.Body.Scales.Height)
+	}
+	if got.Body.Scales.Proportion != 0 || got.Body.Scales.BodyType != 1 {
+		t.Errorf("body.scales = %+v", *got.Body.Scales)
+	}
+}
+
+// Outfit tanpa body harus tersimpan sebagai NULL dan terbaca kembali sebagai
+// nil — bukan objek berisi nol yang terbaca seperti data sungguhan.
+func TestOutfitTanpaBody(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	want := sampleOutfit("otf_test04", "550e8400-e29b-41d4-a716-446655440003", time.Now().UTC().Truncate(time.Microsecond))
+	want.Body = nil
+	if err := outfits.Create(ctx, want); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	got, err := outfits.Get(ctx, want.OutfitID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Body != nil {
+		t.Errorf("body = %+v, ingin nil", got.Body)
 	}
 }
 

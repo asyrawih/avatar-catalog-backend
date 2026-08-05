@@ -99,12 +99,6 @@ func TestCreateOutfitValidasi(t *testing.T) {
 			func(in *service.CreateOutfitInput) { in.CustomTags = []string{"category:y2k,street"} },
 			http.StatusUnprocessableEntity, "invalid_custom_tag",
 		},
-		"slot bentrok": {
-			func(in *service.CreateOutfitInput) {
-				in.Items = append(in.Items, model.OutfitItem{AssetID: assetFace, Slot: "Hair"})
-			},
-			http.StatusConflict, "duplicate_slot",
-		},
 		"assetId kosong": {
 			func(in *service.CreateOutfitInput) {
 				in.Items = append(in.Items, model.OutfitItem{Slot: "Shoulder"})
@@ -135,6 +129,28 @@ func TestCreateOutfitValidasi(t *testing.T) {
 			},
 			http.StatusUnprocessableEntity, "invalid_item_price",
 		},
+		"warna body bukan hex": {
+			func(in *service.CreateOutfitInput) {
+				in.Body = &model.AvatarBody{Colors: &model.BodyColors{Head: "merah"}}
+			},
+			http.StatusUnprocessableEntity, "invalid_body_color",
+		},
+		"skala body nol": {
+			func(in *service.CreateOutfitInput) {
+				in.Body = &model.AvatarBody{Scales: &model.BodyScales{
+					Height: 1, Width: 0, Head: 1, Depth: 1,
+				}}
+			},
+			http.StatusUnprocessableEntity, "invalid_body_scale",
+		},
+		"skala body negatif": {
+			func(in *service.CreateOutfitInput) {
+				in.Body = &model.AvatarBody{Scales: &model.BodyScales{
+					Height: 1, Width: 1, Head: 1, Depth: 1, Proportion: -1,
+				}}
+			},
+			http.StatusUnprocessableEntity, "invalid_body_scale",
+		},
 		"templateId bukan asset id": {
 			func(in *service.CreateOutfitInput) { in.TemplateID = "male_2" },
 			http.StatusUnprocessableEntity, "invalid_template_id",
@@ -158,6 +174,85 @@ func TestCreateOutfitValidasi(t *testing.T) {
 			_, err := svc.Create(context.Background(), in)
 			requireAPIError(t, err, tc.wantStatus, tc.wantCode)
 		})
+	}
+}
+
+// Dua asset di slot yang sama diterima apa adanya: slot cuma label yang
+// dilaporkan klien, dan klien yang tahu apakah keduanya benar-benar bentrok.
+func TestCreateOutfitMenerimaSlotGanda(t *testing.T) {
+	svc := newOutfitService(t)
+	in := validCreateInput()
+	in.Items = append(in.Items, model.OutfitItem{AssetID: assetFace, Slot: "Hair"})
+
+	outfit, err := svc.Create(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Create() error = %v, ingin nil", err)
+	}
+	if len(outfit.Items) != 3 {
+		t.Fatalf("jumlah item = %d, ingin 3", len(outfit.Items))
+	}
+}
+
+func TestCreateOutfitMenyimpanBody(t *testing.T) {
+	svc := newOutfitService(t)
+	in := validCreateInput()
+	in.Body = &model.AvatarBody{
+		// '#' di depan diterima dan dilepas; besar-kecil huruf dibiarkan.
+		Colors: &model.BodyColors{
+			Head: "#AE7C64", Torso: "ae7c64",
+			LeftArm: "AE7C64", RightArm: "AE7C64",
+			LeftLeg: "AE7C64", RightLeg: "AE7C64",
+		},
+		Scales: &model.BodyScales{
+			Height: 1.0499999523162842, Width: 1, Head: 1,
+			Depth: 1, BodyType: 1, Proportion: 0,
+		},
+	}
+
+	outfit, err := svc.Create(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if outfit.Body == nil || outfit.Body.Colors == nil || outfit.Body.Scales == nil {
+		t.Fatalf("body = %+v, ingin tersimpan utuh", outfit.Body)
+	}
+	if outfit.Body.Colors.Head != "AE7C64" {
+		t.Errorf("colors.head = %q, ingin %q — '#' harus dilepas", outfit.Body.Colors.Head, "AE7C64")
+	}
+	if outfit.Body.Colors.Torso != "ae7c64" {
+		t.Errorf("colors.torso = %q, ingin huruf kecilnya dipertahankan", outfit.Body.Colors.Torso)
+	}
+	if outfit.Body.Scales.Height != 1.0499999523162842 {
+		t.Errorf("scales.height = %v, ingin persis seperti yang dikirim", outfit.Body.Scales.Height)
+	}
+}
+
+// body opsional: klien lama yang tidak mengirimnya tetap dilayani.
+func TestCreateOutfitTanpaBody(t *testing.T) {
+	svc := newOutfitService(t)
+
+	outfit, err := svc.Create(context.Background(), validCreateInput())
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if outfit.Body != nil {
+		t.Errorf("body = %+v, ingin nil", outfit.Body)
+	}
+}
+
+// body kosong tidak membawa informasi apa pun, jadi disimpan sebagai tidak
+// dilaporkan — supaya tidak ada dua bentuk berbeda untuk keadaan yang sama.
+func TestCreateOutfitBodyKosongJadiNil(t *testing.T) {
+	svc := newOutfitService(t)
+	in := validCreateInput()
+	in.Body = &model.AvatarBody{}
+
+	outfit, err := svc.Create(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if outfit.Body != nil {
+		t.Errorf("body = %+v, ingin nil", outfit.Body)
 	}
 }
 

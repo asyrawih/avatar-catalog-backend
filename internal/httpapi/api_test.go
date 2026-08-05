@@ -229,9 +229,47 @@ func TestListOutfits(t *testing.T) {
 	}
 
 	first, _ := data[0].(map[string]any)
-	for _, field := range []string{"outfitId", "referenceId", "name", "templateId", "isPublic", "itemCount", "updatedAt"} {
+	for _, field := range []string{"outfitId", "referenceId", "name", "templateId", "isPublic", "itemCount", "items", "updatedAt"} {
 		if _, ok := first[field]; !ok {
 			t.Errorf("ringkasan outfit tidak punya field %q", field)
+		}
+	}
+}
+
+// Daftar membawa item lengkap supaya klien tidak perlu menyusul GET detail per
+// outfit hanya untuk tahu isinya.
+func TestListOutfitsMembawaDetailItem(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, body := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?userId=" + seedUser})
+	requireStatus(t, resp, body, http.StatusOK)
+
+	data, _ := body["data"].([]any)
+	var seeded map[string]any
+	for _, raw := range data {
+		if row, _ := raw.(map[string]any); row["outfitId"] == seedOutfit {
+			seeded = row
+		}
+	}
+	if seeded == nil {
+		t.Fatalf("outfit contoh %s tidak ada di daftar", seedOutfit)
+	}
+
+	items, _ := seeded["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("jumlah item = %d, ingin 3 — sama dengan GET detail", len(items))
+	}
+	if seeded["itemCount"] != float64(len(items)) {
+		t.Errorf("itemCount = %v, ingin %d", seeded["itemCount"], len(items))
+	}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if item["assetId"] != assetHair {
+			continue
+		}
+		if item["name"] != "BLOND BARREL TWISTS DREADS" ||
+			item["assetType"] != "HairAccessory" || item["price"] != float64(69) {
+			t.Errorf("item = %v, ingin detail selengkap GET", item)
 		}
 	}
 }
@@ -506,7 +544,7 @@ func TestTemplateRegistryMenolakIDBukanAssetID(t *testing.T) {
 	requireErrorCode(t, payload, "invalid_template_id")
 }
 
-func TestCreateOutfitSlotBentrok(t *testing.T) {
+func TestCreateOutfitSlotGandaDiterima(t *testing.T) {
 	srv := newTestServer(t)
 	body := createOutfitBody()
 	body["items"] = []map[string]any{
@@ -514,10 +552,90 @@ func TestCreateOutfitSlotBentrok(t *testing.T) {
 		{"assetId": assetJacket, "slot": "Hair"},
 	}
 
+	resp, created := do(t, srv, request{method: http.MethodPost, path: "/v1/outfits", body: body})
+	requireStatus(t, resp, created, http.StatusCreated)
+
+	outfitID, _ := created["outfitId"].(string)
+	resp, detail := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits/" + outfitID})
+	requireStatus(t, resp, detail, http.StatusOK)
+
+	items, _ := detail["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("jumlah item = %d, ingin 2 (dua asset di slot Hair)", len(items))
+	}
+	for _, raw := range items {
+		if item, _ := raw.(map[string]any); item["slot"] != "Hair" {
+			t.Errorf("slot = %v, ingin Hair", item["slot"])
+		}
+	}
+}
+
+// POST menerima body avatar dan GET mengembalikannya dalam bentuk yang sama
+// persis, jadi hasil GET bisa dikirim balik apa adanya.
+func TestCreateOutfitMenyimpanBodyAvatar(t *testing.T) {
+	srv := newTestServer(t)
+	body := createOutfitBody()
+	body["body"] = map[string]any{
+		"colors": map[string]any{
+			"head": "AE7C64", "torso": "AE7C64",
+			"leftArm": "AE7C64", "rightArm": "AE7C64",
+			"leftLeg": "AE7C64", "rightLeg": "AE7C64",
+		},
+		"scales": map[string]any{
+			"height": 1.0499999523162842, "width": 1, "head": 1,
+			"depth": 1, "bodyType": 1, "proportion": 0,
+		},
+	}
+
+	resp, created := do(t, srv, request{method: http.MethodPost, path: "/v1/outfits", body: body})
+	requireStatus(t, resp, created, http.StatusCreated)
+
+	outfitID, _ := created["outfitId"].(string)
+	resp, detail := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits/" + outfitID})
+	requireStatus(t, resp, detail, http.StatusOK)
+
+	got, _ := detail["body"].(map[string]any)
+	if got == nil {
+		t.Fatalf("body = %v, ingin ikut dikembalikan", detail["body"])
+	}
+	colors, _ := got["colors"].(map[string]any)
+	if colors["head"] != "AE7C64" || colors["rightLeg"] != "AE7C64" {
+		t.Errorf("body.colors = %v", got["colors"])
+	}
+	scales, _ := got["scales"].(map[string]any)
+	if scales["height"] != 1.0499999523162842 {
+		t.Errorf("body.scales.height = %v, ingin tanpa pembulatan", scales["height"])
+	}
+	if scales["proportion"] != float64(0) || scales["bodyType"] != float64(1) {
+		t.Errorf("body.scales = %v", got["scales"])
+	}
+}
+
+// Outfit tanpa body dijawab `"body": null`, bukan objek berisi nol.
+func TestOutfitTanpaBodyDijawabNull(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, detail := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits/" + seedOutfit})
+	requireStatus(t, resp, detail, http.StatusOK)
+
+	raw, ok := detail["body"]
+	if !ok {
+		t.Fatal("field body tidak ada di respons")
+	}
+	if raw != nil {
+		t.Errorf("body = %v, ingin null", raw)
+	}
+}
+
+func TestCreateOutfitMenolakWarnaBodyNgawur(t *testing.T) {
+	srv := newTestServer(t)
+	body := createOutfitBody()
+	body["body"] = map[string]any{"colors": map[string]any{"head": "merah"}}
+
 	resp, payload := do(t, srv, request{method: http.MethodPost, path: "/v1/outfits", body: body})
 
-	requireStatus(t, resp, payload, http.StatusConflict)
-	requireErrorCode(t, payload, "duplicate_slot")
+	requireStatus(t, resp, payload, http.StatusUnprocessableEntity)
+	requireErrorCode(t, payload, "invalid_body_color")
 }
 
 func TestPatchOutfitBukanPemilik(t *testing.T) {

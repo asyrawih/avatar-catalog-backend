@@ -54,6 +54,14 @@ CREATE TABLE outfit (
     name         text        NOT NULL,
     is_public    boolean     NOT NULL DEFAULT false,
     custom_tags  jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    -- Warna kulit dan skala tubuh dari HumanoidDescription: {"colors": {...},
+    -- "scales": {...}}. Item saja tidak cukup untuk merender ulang avatar.
+    --
+    -- Disimpan sebagai satu jsonb, bukan dipecah jadi dua belas kolom: isinya
+    -- blob render yang dilaporkan klien dan dikembalikan apa adanya, tidak
+    -- pernah dipakai untuk menyaring maupun mengurutkan. NULL berarti klien
+    -- tidak melaporkannya.
+    body         jsonb,
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now(),
     -- Soft delete: baris tidak pernah dihapus supaya referenceId yang sudah
@@ -88,9 +96,10 @@ CREATE TABLE outfit_item (
     PRIMARY KEY (outfit_id, asset_id)
 );
 
--- Satu slot hanya boleh diisi satu asset; ini pasangan basis data dari
--- kegagalan 409 duplicate_slot.
-CREATE UNIQUE INDEX outfit_item_slot_idx ON outfit_item (outfit_id, slot);
+-- Satu slot boleh diisi lebih dari satu asset — indeksnya biasa, bukan unik.
+-- Yang tetap ditolak adalah asset yang sama dua kali dalam satu outfit, lewat
+-- primary key di atas. Indeks ini melayani ORDER BY slot saat item dibaca.
+CREATE INDEX outfit_item_slot_idx ON outfit_item (outfit_id, slot);
 
 -- --- Transaksi --------------------------------------------------------------
 

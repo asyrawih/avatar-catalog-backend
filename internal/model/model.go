@@ -50,6 +50,7 @@ type Outfit struct {
 	IsPublic    bool
 	CustomTags  []string
 	Items       []OutfitItem
+	Body        *AvatarBody // nil = klien tidak melaporkannya
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DeletedAt   *time.Time // soft delete: baris tidak pernah dihapus
@@ -57,6 +58,43 @@ type Outfit struct {
 
 // Deleted melaporkan apakah outfit sudah di-soft-delete.
 func (o Outfit) Deleted() bool { return o.DeletedAt != nil }
+
+// AvatarBody adalah bagian HumanoidDescription yang bukan asset: warna kulit
+// per anggota badan dan skala tubuh.
+//
+// Item saja tidak cukup untuk merender ulang avatar — dua outfit dengan item
+// identik tetap terlihat berbeda kalau warna dan skalanya beda. Nilainya
+// dilaporkan klien dan disimpan apa adanya.
+//
+// Colors dan Scales masing-masing boleh nil: klien yang hanya melaporkan salah
+// satu tidak dipaksa mengarang sisanya.
+type AvatarBody struct {
+	Colors *BodyColors
+	Scales *BodyScales
+}
+
+// BodyColors adalah warna per anggota badan, hex RGB tanpa '#' (mis. "AE7C64").
+type BodyColors struct {
+	Head     string
+	Torso    string
+	LeftArm  string
+	RightArm string
+	LeftLeg  string
+	RightLeg string
+}
+
+// BodyScales adalah skala tubuh dari HumanoidDescription.
+//
+// Height, Width, Head, dan Depth adalah pengali yang harus positif. BodyType
+// dan Proportion adalah bobot yang boleh nol — nol memang nilai wajarnya.
+type BodyScales struct {
+	Height     float64
+	Width      float64
+	Head       float64
+	Depth      float64
+	BodyType   float64
+	Proportion float64
+}
 
 // OutfitItem adalah satu asset yang terpasang pada slot outfit (tabel OUTFIT_ITEM).
 //

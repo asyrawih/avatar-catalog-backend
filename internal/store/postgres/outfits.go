@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -25,7 +26,7 @@ var _ store.Outfits = (*Outfits)(nil)
 
 const outfitColumns = `
 	o.outfit_id, o.reference_id::text, o.reco_item_id, o.user_id, o.template_id,
-	o.name, o.is_public, o.custom_tags, o.created_at, o.updated_at, o.deleted_at`
+	o.name, o.is_public, o.custom_tags, o.body, o.created_at, o.updated_at, o.deleted_at`
 
 // Create menyimpan outfit beserta itemnya dalam satu transaksi.
 func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
@@ -34,12 +35,17 @@ func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
 			return err
 		}
 
-		_, err := tx.Exec(ctx, `
+		body, err := marshalBody(o.Body)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, `
 			INSERT INTO outfit (outfit_id, reference_id, reco_item_id, user_id, template_id,
-			                    name, is_public, custom_tags, created_at, updated_at, deleted_at)
-			VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			                    name, is_public, custom_tags, body, created_at, updated_at, deleted_at)
+			VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)`,
 			o.OutfitID, o.ReferenceID, o.RecoItemID, o.UserID, o.TemplateID,
-			o.Name, o.IsPublic, tagsOrEmpty(o.CustomTags), o.CreatedAt, o.UpdatedAt, o.DeletedAt)
+			o.Name, o.IsPublic, tagsOrEmpty(o.CustomTags), body, o.CreatedAt, o.UpdatedAt, o.DeletedAt)
 		if err != nil {
 			return err
 		}
@@ -168,13 +174,18 @@ func (s *Outfits) Update(ctx context.Context, outfitID string, fn func(*model.Ou
 		draft.OutfitID = current.OutfitID       // PK tidak boleh berubah
 		draft.ReferenceID = current.ReferenceID // referenceId sudah dipegang RecoService
 
+		body, err := marshalBody(draft.Body)
+		if err != nil {
+			return err
+		}
+
 		_, err = tx.Exec(ctx, `
 			UPDATE outfit
 			SET reco_item_id = $2, template_id = $3, name = $4, is_public = $5,
-			    custom_tags = $6, updated_at = $7, deleted_at = $8
+			    custom_tags = $6, body = $7::jsonb, updated_at = $8, deleted_at = $9
 			WHERE outfit_id = $1`,
 			outfitID, draft.RecoItemID, draft.TemplateID, draft.Name, draft.IsPublic,
-			tagsOrEmpty(draft.CustomTags), draft.UpdatedAt, draft.DeletedAt)
+			tagsOrEmpty(draft.CustomTags), body, draft.UpdatedAt, draft.DeletedAt)
 		if err != nil {
 			return err
 		}
@@ -290,17 +301,106 @@ type scanner interface {
 }
 
 func scanOutfit(row scanner) (model.Outfit, error) {
-	var o model.Outfit
+	var (
+		o    model.Outfit
+		body []byte
+	)
 	err := row.Scan(&o.OutfitID, &o.ReferenceID, &o.RecoItemID, &o.UserID, &o.TemplateID,
-		&o.Name, &o.IsPublic, &o.CustomTags, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt)
+		&o.Name, &o.IsPublic, &o.CustomTags, &body, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt)
 	if err != nil {
 		return model.Outfit{}, err
 	}
 	if o.CustomTags == nil {
 		o.CustomTags = []string{}
 	}
+	o.Body, err = unmarshalBody(body)
+	if err != nil {
+		return model.Outfit{}, err
+	}
 	o.Items = []model.OutfitItem{}
 	return o, nil
+}
+
+// OUTFIT.body disimpan sebagai jsonb, bukan dipecah jadi dua belas kolom.
+// Isinya blob render yang dilaporkan klien dan dikembalikan apa adanya —
+// backend tidak pernah menyaring atau mengurutkan berdasarkan warna maupun
+// skala, jadi kolom terpisah hanya menambah lebar tabel tanpa dipakai.
+//
+// Bentuk JSON-nya ditulis eksplisit di sini supaya isi kolom tidak ikut
+// berubah kalau field di paket model diganti nama.
+type bodyJSON struct {
+	Colors *bodyColorsJSON `json:"colors,omitempty"`
+	Scales *bodyScalesJSON `json:"scales,omitempty"`
+}
+
+type bodyColorsJSON struct {
+	Head     string `json:"head"`
+	Torso    string `json:"torso"`
+	LeftArm  string `json:"leftArm"`
+	RightArm string `json:"rightArm"`
+	LeftLeg  string `json:"leftLeg"`
+	RightLeg string `json:"rightLeg"`
+}
+
+type bodyScalesJSON struct {
+	Height     float64 `json:"height"`
+	Width      float64 `json:"width"`
+	Head       float64 `json:"head"`
+	Depth      float64 `json:"depth"`
+	BodyType   float64 `json:"bodyType"`
+	Proportion float64 `json:"proportion"`
+}
+
+func marshalBody(body *model.AvatarBody) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+
+	out := bodyJSON{}
+	if c := body.Colors; c != nil {
+		out.Colors = &bodyColorsJSON{
+			Head: c.Head, Torso: c.Torso,
+			LeftArm: c.LeftArm, RightArm: c.RightArm,
+			LeftLeg: c.LeftLeg, RightLeg: c.RightLeg,
+		}
+	}
+	if s := body.Scales; s != nil {
+		out.Scales = &bodyScalesJSON{
+			Height: s.Height, Width: s.Width, Head: s.Head,
+			Depth: s.Depth, BodyType: s.BodyType, Proportion: s.Proportion,
+		}
+	}
+	return json.Marshal(out)
+}
+
+func unmarshalBody(raw []byte) (*model.AvatarBody, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var stored bodyJSON
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, err
+	}
+
+	out := model.AvatarBody{}
+	if c := stored.Colors; c != nil {
+		out.Colors = &model.BodyColors{
+			Head: c.Head, Torso: c.Torso,
+			LeftArm: c.LeftArm, RightArm: c.RightArm,
+			LeftLeg: c.LeftLeg, RightLeg: c.RightLeg,
+		}
+	}
+	if s := stored.Scales; s != nil {
+		out.Scales = &model.BodyScales{
+			Height: s.Height, Width: s.Width, Head: s.Head,
+			Depth: s.Depth, BodyType: s.BodyType, Proportion: s.Proportion,
+		}
+	}
+	if out.Colors == nil && out.Scales == nil {
+		return nil, nil
+	}
+	return &out, nil
 }
 
 func collectOutfits(rows pgx.Rows) ([]model.Outfit, error) {

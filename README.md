@@ -76,9 +76,10 @@ docker compose down -v && docker compose up -d db
 
 Beberapa aturan API sudah ditegakkan di tingkat skema, bukan hanya di kode:
 `transaction.idempotency_key` unik (retry tidak bisa membuat baris ganda),
-`outfit.reference_id` unik, indeks unik `(outfit_id, slot)` pada `outfit_item`
-(pasangan basis data dari `409 duplicate_slot`), dan `catalog_item.status`
-dibatasi `active|dead|moderated`.
+`outfit.reference_id` unik, dan primary key `(outfit_id, asset_id)` pada
+`outfit_item` (satu asset tidak bisa masuk dua kali ke outfit yang sama).
+Slot **tidak** unik: dua asset boleh menempati slot yang sama, karena slot cuma
+label yang dilaporkan klien dan kliennya yang tahu apakah keduanya bentrok.
 
 `outfit.user_id` dan `transaction.user_id` menunjuk tabel `player`. Backend
 belum punya sumber kebenaran untuk username, jadi adapter Postgres menyisipkan
@@ -124,8 +125,8 @@ Redis dikosongkan.
 
 | Method | Path | Keterangan |
 | --- | --- | --- |
-| GET | `/v1/outfits?userId=&isPublic=&limit=&cursor=` | Daftar outfit, terbaru dulu; `userId` opsional |
-| POST | `/v1/outfits` | Buat outfit; backend membangkitkan `referenceId` |
+| GET | `/v1/outfits?userId=&isPublic=&limit=&cursor=` | Daftar outfit beserta itemnya, terbaru dulu; `userId` opsional |
+| POST | `/v1/outfits` | Buat outfit beserta `body` avatar; backend membangkitkan `referenceId` |
 | GET | `/v1/outfits/{outfitId}` | Detail outfit beserta item |
 | PATCH | `/v1/outfits/{outfitId}` | Ubah sebagian metadata, termasuk simpan `recoItemId` |
 | PUT | `/v1/outfits/{outfitId}/items` | Ganti seluruh isi item |
@@ -183,6 +184,45 @@ Perhatikan: selama autentikasi belum terpasang, daftar tanpa `userId` **juga
 menampilkan outfit privat milik semua pemain**. Begitu autentikasi masuk,
 daftar gabungan ini sebaiknya dibatasi — hanya `isPublic=true`, atau hanya
 untuk token layanan.
+
+**Body avatar.** Item saja tidak cukup untuk merender ulang avatar — dua outfit
+dengan item identik tetap terlihat berbeda kalau warna kulit dan skala tubuhnya
+beda. `POST /v1/outfits` menerima keduanya lewat field `body`, dan setiap
+respons outfit mengembalikannya dalam bentuk yang sama:
+
+```json
+{
+  "body": {
+    "colors": { "head": "AE7C64", "torso": "AE7C64", "leftArm": "AE7C64",
+                "rightArm": "AE7C64", "leftLeg": "AE7C64", "rightLeg": "AE7C64" },
+    "scales": { "height": 1.0499999523162842, "width": 1, "head": 1,
+                "depth": 1, "bodyType": 1, "proportion": 0 }
+  }
+}
+```
+
+`body` opsional, begitu juga `colors` dan `scales` di dalamnya — outfit yang
+tidak melaporkannya dijawab `"body": null`. Warna adalah hex RGB 6 digit;
+`#` di depan diterima dan dilepas, besar-kecil huruf dibiarkan seperti yang
+dikirim. `height`, `width`, `head`, dan `depth` adalah pengali dan harus lebih
+besar dari nol; `bodyType` dan `proportion` adalah bobot yang boleh nol.
+Rentang atasnya tidak dibatasi — batas Roblox bergeser antar rig dan antar
+rilis, jadi menebaknya di sini hanya akan menolak avatar yang sah.
+
+Disimpan sebagai satu kolom `jsonb` di `OUTFIT.body`, bukan dua belas kolom:
+isinya blob render yang tidak pernah dipakai menyaring maupun mengurutkan.
+
+Belum ada di `PATCH /v1/outfits/{outfitId}` — body hanya bisa diisi saat outfit
+dibuat.
+
+**Daftar membawa item.** Ringkasan outfit di `GET /v1/outfits` dan
+`POST /v1/outfits/resolve` menyertakan `items` dan `body` selengkap `GET`
+detail, jadi klien tidak perlu menyusul satu permintaan per outfit hanya untuk
+tahu isinya.
+Ini gratis di sisi database: penyimpanan memang sudah mengambil item satu
+halaman penuh dalam satu query. Yang bertambah cuma ukuran respons — dengan
+`limit=100` dan outfit terisi penuh, satu halaman bisa mencapai ratusan
+kilobyte. Kecilkan `limit` kalau itu terasa. Field `itemCount` tetap ada.
 
 **Cursor, bukan offset.** Katalog berubah terus karena sync worker, jadi offset
 akan menggeser hasil di antara dua permintaan. Cursor dikodekan base64url dan
