@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-avatar_catalog}
       POSTGRES_USER: ${POSTGRES_USER:-avatar}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kelasmalam}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-avatar_dev_password}
       # Bikin initdb tegas soal encoding dan collation supaya urutan teks sama
       # di semua mesin developer.
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
@@ -63,8 +63,31 @@ services:
       CACHE_TTL: ${CACHE_TTL:-1m}
       CACHE_PREFIX: ${CACHE_PREFIX:-avatar-catalog}
       AUTH_TOKENS: ${AUTH_TOKENS:-}
+    # Trafik publik lewat caddy. Port ini hanya dibuka ke loopback host supaya
+    # curl langsung ke api masih bisa saat debug.
     ports:
-      - "${PORT:-8080}:8080"
+      - "127.0.0.1:${PORT:-8080}:8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # ":80" = lokal tanpa TLS. Isi domain (mis. api.contoh.com) untuk
+      # sertifikat Let's Encrypt otomatis.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      ACME_EMAIL: ${ACME_EMAIL:-hanan@kelasmalam.app}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Sertifikat harus persisten, kalau tidak Let's Encrypt kena rate limit
+      # setiap kali container dibuat ulang.
+      - caddy_data:/data
+      - caddy_config:/config
 
   # Profil tools: `docker compose --profile tools up` kalau butuh lihat isi tabel.
   adminer:
@@ -81,3 +104,5 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

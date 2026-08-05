@@ -1,4 +1,4 @@
-.PHONY: run build test test-integration check fmt vet tidy clean up down logs psql redis-cli db-reset
+.PHONY: run build test test-integration check fmt vet tidy clean up down logs psql redis-cli db-reset caddy-reload
 
 BINARY := bin/server
 
@@ -52,6 +52,10 @@ psql:
 
 redis-cli:
 	docker compose exec redis redis-cli
+
+# Terapkan perubahan Caddyfile tanpa memutus koneksi yang sedang jalan.
+caddy-reload:
+	docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 # Buang volume supaya skrip di db/init dijalankan ulang dari awal.
 db-reset:

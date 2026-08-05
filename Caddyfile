@@ -1,0 +1,36 @@
+# Alamat situs datang dari env SITE_ADDRESS.
+#   :80                       -> lokal, HTTP saja
+#   catalog.kelasmalam.app    -> produksi, sertifikat Let's Encrypt otomatis
+{
+	email {$ACME_EMAIL:hanan@kelasmalam.app}
+}
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# Di belakang Cloudflare, IP asli klien ada di header ini. Diteruskan ke
+	# api supaya log/rate limit nanti tidak melihat IP edge Cloudflare.
+	request_header X-Real-IP {http.request.header.CF-Connecting-IP}
+
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+	handle /readyz {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy api:8080 {
+			# Timeout longgar: beberapa endpoint katalog menulis ke Postgres.
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
