@@ -15,7 +15,10 @@ import (
 
 // Batas yang dipakai endpoint outfit.
 const (
-	MaxResolveIDs   = 100
+	// MaxResolveIDs membatasi panjang daftar referenceId yang boleh dikirim ke
+	// resolve. Batasnya jauh di atas satu halaman karena hasilnya berhalaman:
+	// yang dikirim adalah seluruh feed, yang diambil hanya sepotong.
+	MaxResolveIDs   = 500
 	MaxOutfitItems  = 30
 	MaxCustomTags   = 20
 	DefaultPageSize = 20
@@ -306,19 +309,68 @@ func (s *Outfits) SoftDelete(ctx context.Context, actor Actor, outfitID string) 
 	})
 }
 
+// ResolvePage adalah satu halaman hasil resolve.
+//
+// NotFound hanya memuat referenceId dari halaman ini, bukan dari seluruh
+// daftar — id di halaman yang belum diminta belum pernah dicari, jadi
+// melaporkannya sebagai "tidak ditemukan" akan menyesatkan.
+// Total dan TotalPages bisa dilaporkan pasti karena yang dinomori adalah
+// daftar referenceId yang klien kirim sendiri — tidak perlu menghitung isi
+// database.
+type ResolvePage struct {
+	Found      []model.Outfit
+	NotFound   []string
+	NextCursor string
+	HasMore    bool
+	Total      int
+	TotalPages int
+}
+
 // Resolve menukar sekumpulan referenceId dari feed rekomendasi menjadi
 // metadata render.
-func (s *Outfits) Resolve(ctx context.Context, referenceIDs []string) ([]model.Outfit, []string, error) {
-	if len(referenceIDs) == 0 {
-		return []model.Outfit{}, []string{}, nil
-	}
+//
+// Feed bisa membawa ratusan referenceId sekaligus, sementara satu outfit
+// membawa seluruh item dan body-nya. Karena itu hasilnya berhalaman: cursor
+// menandai posisi di dalam referenceIds yang dikirim klien, dan tiap
+// permintaan hanya mengambil sepotong itu dari penyimpanan. Klien mengirim
+// daftar id yang sama persis di tiap halaman.
+func (s *Outfits) Resolve(ctx context.Context, referenceIDs []string, rawCursor string, limit int) (ResolvePage, error) {
 	if len(referenceIDs) > MaxResolveIDs {
-		return nil, nil, apierr.TooLarge("too_many_ids", fmt.Sprintf("Maksimum %d referenceId per permintaan", MaxResolveIDs))
+		return ResolvePage{}, apierr.TooLarge("too_many_ids", fmt.Sprintf("Maksimum %d referenceId per permintaan", MaxResolveIDs))
 	}
 
-	found, err := s.outfits.ListByReferenceIDs(ctx, referenceIDs)
+	var cursor paging.PositionCursor
+	if _, err := paging.Decode(rawCursor, &cursor); err != nil {
+		return ResolvePage{}, apierr.BadRequest("invalid_cursor", "Cursor tidak bisa dibaca")
+	}
+	if cursor.Pos < 0 {
+		return ResolvePage{}, apierr.BadRequest("invalid_cursor", "Cursor tidak bisa dibaca")
+	}
+
+	limit = paging.ClampLimit(limit, DefaultPageSize, MaxPageSize)
+
+	total := len(referenceIDs)
+	// Pembagian dibulatkan ke atas: sisa berapa pun tetap satu halaman.
+	totalPages := (total + limit - 1) / limit
+
+	// Cursor yang sudah melewati ujung daftar berarti halaman habis. Ini juga
+	// menjaga daftar yang menyusut di antara dua permintaan tidak menjadi
+	// panic saat diiris.
+	if cursor.Pos >= total {
+		return ResolvePage{
+			Found:      []model.Outfit{},
+			NotFound:   []string{},
+			Total:      total,
+			TotalPages: totalPages,
+		}, nil
+	}
+
+	end := min(cursor.Pos+limit, total)
+	page := referenceIDs[cursor.Pos:end]
+
+	found, err := s.outfits.ListByReferenceIDs(ctx, page)
 	if err != nil {
-		return nil, nil, err
+		return ResolvePage{}, err
 	}
 
 	seen := make(map[string]struct{}, len(found))
@@ -327,12 +379,26 @@ func (s *Outfits) Resolve(ctx context.Context, referenceIDs []string) ([]model.O
 	}
 
 	notFound := make([]string, 0)
-	for _, ref := range referenceIDs {
+	for _, ref := range page {
 		if _, ok := seen[ref]; !ok {
 			notFound = append(notFound, ref)
 		}
 	}
-	return found, notFound, nil
+
+	result := ResolvePage{
+		Found:      found,
+		NotFound:   notFound,
+		HasMore:    end < total,
+		Total:      total,
+		TotalPages: totalPages,
+	}
+	if result.HasMore {
+		result.NextCursor, err = paging.Encode(paging.PositionCursor{Pos: end})
+		if err != nil {
+			return ResolvePage{}, err
+		}
+	}
+	return result, nil
 }
 
 // load mengambil outfit dan menerjemahkan keadaannya menjadi 404 atau 410.

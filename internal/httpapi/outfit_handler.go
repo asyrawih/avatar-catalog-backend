@@ -284,20 +284,32 @@ func (h *outfitHandler) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolve menangani POST /v1/outfits/resolve.
+//
+// limit dan cursor dibaca dari query string, sama seperti GET /v1/outfits,
+// supaya body permintaan tetap murni daftar id — klien cukup mengirim ulang
+// body yang sama di tiap halaman dan hanya menukar URL-nya.
 func (h *outfitHandler) resolve(w http.ResponseWriter, r *http.Request) {
 	var body resolveBody
 	if !decodeJSON(w, r, &body) {
 		return
 	}
 
-	found, notFound, err := h.outfits.Resolve(r.Context(), body.ReferenceIDs)
+	limit, err := queryInt(r, "limit", 0)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"data":     newOutfitSummaries(found),
-		"notFound": notFound,
+	page, err := h.outfits.Resolve(r.Context(), body.ReferenceIDs, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resolveEnvelope{
+		listEnvelope: newListEnvelope(newOutfitSummaries(page.Found), page.NextCursor, page.HasMore),
+		Total:        page.Total,
+		TotalPages:   page.TotalPages,
+		NotFound:     page.NotFound,
 	})
 }

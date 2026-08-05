@@ -21,6 +21,7 @@ const (
 	seededOutfit = "otf_9f2a41"
 	seededUser   = int64(627278822)
 	seededRefID  = "550e8400-e29b-41d4-a716-446655440000"
+	seededRefID2 = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 	unknownRefID = "00000000-0000-0000-0000-000000000000"
 
 	// devRig sudah terdaftar di data contoh; newRig belum pernah dilihat backend.
@@ -459,16 +460,95 @@ func TestReplaceItemsMenggantiSeluruhKoleksi(t *testing.T) {
 func TestResolveMelaporkanYangTidakKetemu(t *testing.T) {
 	svc := newOutfitService(t)
 
-	found, notFound, err := svc.Resolve(context.Background(), []string{seededRefID, unknownRefID})
+	page, err := svc.Resolve(context.Background(), []string{seededRefID, unknownRefID}, "", 0)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	if len(found) != 1 || found[0].ReferenceID != seededRefID {
-		t.Errorf("found = %+v, ingin satu outfit dengan referenceId contoh", found)
+	if len(page.Found) != 1 || page.Found[0].ReferenceID != seededRefID {
+		t.Errorf("found = %+v, ingin satu outfit dengan referenceId contoh", page.Found)
 	}
-	if len(notFound) != 1 || notFound[0] != unknownRefID {
-		t.Errorf("notFound = %v, ingin [%s]", notFound, unknownRefID)
+	if len(page.NotFound) != 1 || page.NotFound[0] != unknownRefID {
+		t.Errorf("notFound = %v, ingin [%s]", page.NotFound, unknownRefID)
+	}
+	if page.HasMore || page.NextCursor != "" {
+		t.Errorf("hasMore=%v nextCursor=%q, ingin habis dalam satu halaman", page.HasMore, page.NextCursor)
+	}
+}
+
+// Feed rekomendasi mengirim seluruh daftar id di tiap halaman; cursor menandai
+// sejauh mana daftar itu sudah ditukar jadi metadata.
+func TestResolveBerhalamanDenganCursor(t *testing.T) {
+	svc := newOutfitService(t)
+	ctx := context.Background()
+
+	ids := []string{seededRefID, unknownRefID, seededRefID2}
+
+	first, err := svc.Resolve(ctx, ids, "", 2)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !first.HasMore || first.NextCursor == "" {
+		t.Fatalf("halaman pertama hasMore=%v nextCursor=%q, ingin masih ada lanjutan", first.HasMore, first.NextCursor)
+	}
+	// 3 id dengan limit 2 = 2 halaman; sisa satu id tetap dihitung satu halaman.
+	if first.Total != 3 || first.TotalPages != 2 {
+		t.Errorf("total=%d totalPages=%d, ingin 3 dan 2", first.Total, first.TotalPages)
+	}
+	if len(first.Found) != 1 || first.Found[0].ReferenceID != seededRefID {
+		t.Errorf("found = %+v, ingin hanya id contoh pertama", first.Found)
+	}
+	// notFound hanya melaporkan id di halaman ini, bukan sisa daftar yang
+	// belum dicari sama sekali.
+	if len(first.NotFound) != 1 || first.NotFound[0] != unknownRefID {
+		t.Errorf("notFound = %v, ingin [%s] saja", first.NotFound, unknownRefID)
+	}
+
+	second, err := svc.Resolve(ctx, ids, first.NextCursor, 2)
+	if err != nil {
+		t.Fatalf("Resolve() halaman kedua error = %v", err)
+	}
+	if second.HasMore || second.NextCursor != "" {
+		t.Errorf("halaman kedua hasMore=%v, ingin daftar habis", second.HasMore)
+	}
+	// total dan totalPages tidak berubah antar halaman.
+	if second.Total != 3 || second.TotalPages != 2 {
+		t.Errorf("total=%d totalPages=%d, ingin tetap 3 dan 2", second.Total, second.TotalPages)
+	}
+	if len(second.Found) != 1 || second.Found[0].ReferenceID != seededRefID2 {
+		t.Errorf("found = %+v, ingin outfit contoh kedua", second.Found)
+	}
+	if len(second.NotFound) != 0 {
+		t.Errorf("notFound = %v, ingin kosong", second.NotFound)
+	}
+}
+
+func TestResolveMenolakCursorRusak(t *testing.T) {
+	svc := newOutfitService(t)
+
+	_, err := svc.Resolve(context.Background(), []string{seededRefID}, "bukan-cursor", 0)
+	requireAPIError(t, err, http.StatusBadRequest, "invalid_cursor")
+}
+
+// Cursor yang melewati ujung daftar berarti habis, bukan panic karena irisan
+// di luar batas.
+func TestResolveCursorMelewatiUjungDaftar(t *testing.T) {
+	svc := newOutfitService(t)
+	ctx := context.Background()
+
+	page, err := svc.Resolve(ctx, []string{seededRefID, seededRefID2}, "", 1)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	// Daftar menyusut di antara dua permintaan — cursor menunjuk posisi 1 yang
+	// kini sudah di luar batas.
+	habis, err := svc.Resolve(ctx, []string{}, page.NextCursor, 1)
+	if err != nil {
+		t.Fatalf("Resolve() setelah daftar menyusut error = %v", err)
+	}
+	if len(habis.Found) != 0 || len(habis.NotFound) != 0 || habis.HasMore {
+		t.Errorf("halaman = %+v, ingin kosong dan habis", habis)
 	}
 }
 
@@ -480,7 +560,7 @@ func TestResolveMenolakTerlaluBanyakID(t *testing.T) {
 		ids[i] = unknownRefID
 	}
 
-	_, _, err := svc.Resolve(context.Background(), ids)
+	_, err := svc.Resolve(context.Background(), ids, "", 0)
 	requireAPIError(t, err, http.StatusRequestEntityTooLarge, "too_many_ids")
 }
 

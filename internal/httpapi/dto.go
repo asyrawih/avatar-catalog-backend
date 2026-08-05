@@ -21,6 +21,18 @@ func newListEnvelope(data any, nextCursor string, hasMore bool) listEnvelope {
 	return env
 }
 
+// resolveEnvelope adalah envelope daftar biasa ditambah referenceId yang tidak
+// ketemu. notFound hanya memuat id dari halaman ini — id di halaman berikutnya
+// belum pernah dicari.
+// total dan totalPages menghitung referenceId yang dikirim klien, bukan isi
+// database — angkanya pasti dan tidak memerlukan query hitung.
+type resolveEnvelope struct {
+	listEnvelope
+	Total      int      `json:"total"`
+	TotalPages int      `json:"totalPages"`
+	NotFound   []string `json:"notFound"`
+}
+
 // --- outfit ---------------------------------------------------------------
 
 // outfitSummaryDTO membawa itemnya sekalian. Penyimpanan sudah mengambil item

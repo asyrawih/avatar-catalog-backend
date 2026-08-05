@@ -131,7 +131,7 @@ Redis dikosongkan.
 | PATCH | `/v1/outfits/{outfitId}` | Ubah sebagian metadata, termasuk simpan `recoItemId` |
 | PUT | `/v1/outfits/{outfitId}/items` | Ganti seluruh isi item |
 | DELETE | `/v1/outfits/{outfitId}` | Soft delete (isi `deletedAt`) |
-| POST | `/v1/outfits/resolve` | Tukar sekumpulan `referenceId` jadi metadata render |
+| POST | `/v1/outfits/resolve?limit=&cursor=` | Tukar sekumpulan `referenceId` jadi metadata render, berhalaman |
 | GET | `/v1/templates?limit=&cursor=` | Daftar rig terdaftar, terbaru dulu |
 | POST | `/v1/templates` | Daftarkan rig beserta nama dan gender |
 | GET | `/v1/templates/{templateId}` | Detail satu rig |
@@ -239,10 +239,40 @@ halaman penuh dalam satu query. Yang bertambah cuma ukuran respons — dengan
 `limit=100` dan outfit terisi penuh, satu halaman bisa mencapai ratusan
 kilobyte. Kecilkan `limit` kalau itu terasa. Field `itemCount` tetap ada.
 
+**Resolve berhalaman.** Feed rekomendasi bisa membawa ratusan `referenceId`
+sekaligus, sementara tiap outfit di respons membawa seluruh item dan body-nya.
+Karena itu `POST /v1/outfits/resolve` ikut berhalaman, dengan `limit` dan
+`cursor` di query string dan envelope yang sama dengan `GET /v1/outfits`:
+
+```bash
+curl -X POST "http://localhost:8080/v1/outfits/resolve?limit=50" \
+  -H 'Content-Type: application/json' \
+  -d '{"referenceIds":["550e8400-...","6ba7b810-..."]}'
+```
+
+Body permintaan tetap murni daftar id: klien mengirim **seluruh** daftar yang
+sama di tiap halaman dan hanya menukar `cursor` di URL. Cursor di sini menandai
+posisi di dalam daftar itu, jadi hanya sepotongnya yang benar-benar diambil
+dari penyimpanan. Batasnya 500 `referenceId` per permintaan
+(`413 too_many_ids`), jauh di atas satu halaman karena yang dikirim adalah
+seluruh feed sedangkan yang diambil hanya sepotong.
+
+Respons juga membawa `total` (jumlah `referenceId` yang dikirim) dan
+`totalPages`. Keduanya pasti dan gratis: yang dihitung adalah daftar milik
+klien, bukan isi database, jadi tidak ada query hitung tambahan. `GET
+/v1/outfits` sengaja tidak punya keduanya — di sana totalnya baru diketahui
+lewat `COUNT` ke tabel outfit di tiap permintaan.
+
+Perhatikan `notFound`: isinya hanya `referenceId` dari halaman yang sedang
+diminta. Id di halaman berikutnya belum pernah dicari, jadi belum bisa disebut
+tidak ditemukan — kumpulkan `notFound` dari semua halaman kalau butuh totalnya.
+
 **Cursor, bukan offset.** Katalog berubah terus karena sync worker, jadi offset
 akan menggeser hasil di antara dua permintaan. Cursor dikodekan base64url dan
 buram bagi klien: daftar outfit dan transaksi memakai keyset `(waktu, id)`, isi
-etalase memakai posisi karena urutannya stabil.
+etalase memakai posisi karena urutannya stabil. Resolve juga memakai posisi —
+yang dinomori bukan isi database, melainkan daftar `referenceId` yang klien
+sendiri kirim ulang di tiap halaman, jadi urutannya stabil menurut definisi.
 
 **Item mati.** Item ber-status `dead` tetap muncul di detail outfit tapi
 ditandai (`status: "dead"`, `name`/`price` null) supaya game server bisa

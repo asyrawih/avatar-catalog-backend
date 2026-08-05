@@ -22,6 +22,8 @@ const (
 	assetJacket = float64(14433369343)
 	seedOutfit  = "otf_9f2a41"
 	seedOutfit2 = "otf_3c88de"
+	seedRefID   = "550e8400-e29b-41d4-a716-446655440000"
+	seedRefID2  = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 	seedUser    = "627278822"
 
 	// devRig sudah terdaftar di data contoh; newRig belum pernah dilihat backend.
@@ -745,6 +747,80 @@ func TestResolveOutfits(t *testing.T) {
 	if len(notFound) != 1 || notFound[0] != "00000000-0000-0000-0000-000000000000" {
 		t.Errorf("notFound = %v", payload["notFound"])
 	}
+	if payload["hasMore"] != false || payload["nextCursor"] != nil {
+		t.Errorf("hasMore=%v nextCursor=%v, ingin false dan null", payload["hasMore"], payload["nextCursor"])
+	}
+}
+
+// Resolve berhalaman seperti daftar outfit: klien mengirim daftar id yang sama
+// di tiap halaman dan hanya menukar cursor di URL.
+func TestResolveOutfitsBerhalaman(t *testing.T) {
+	srv := newTestServer(t)
+
+	ids := map[string]any{"referenceIds": []string{
+		seedRefID,
+		"00000000-0000-0000-0000-000000000000",
+		seedRefID2,
+	}}
+
+	resp, first := do(t, srv, request{
+		method: http.MethodPost,
+		path:   "/v1/outfits/resolve?limit=2",
+		body:   ids,
+	})
+	requireStatus(t, resp, first, http.StatusOK)
+
+	if first["hasMore"] != true {
+		t.Fatalf("hasMore = %v, ingin true", first["hasMore"])
+	}
+	if first["total"] != float64(3) || first["totalPages"] != float64(2) {
+		t.Errorf("total=%v totalPages=%v, ingin 3 dan 2", first["total"], first["totalPages"])
+	}
+	cursor, _ := first["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatalf("nextCursor = %v, ingin terisi", first["nextCursor"])
+	}
+	if data, _ := first["data"].([]any); len(data) != 1 {
+		t.Errorf("data = %v, ingin satu outfit di halaman pertama", first["data"])
+	}
+	// notFound halaman pertama hanya id yang benar-benar sudah dicari.
+	if notFound, _ := first["notFound"].([]any); len(notFound) != 1 {
+		t.Errorf("notFound = %v, ingin satu id dari halaman ini saja", first["notFound"])
+	}
+
+	resp, second := do(t, srv, request{
+		method: http.MethodPost,
+		path:   "/v1/outfits/resolve?limit=2&cursor=" + cursor,
+		body:   ids,
+	})
+	requireStatus(t, resp, second, http.StatusOK)
+
+	if second["hasMore"] != false || second["nextCursor"] != nil {
+		t.Errorf("hasMore=%v nextCursor=%v, ingin habis", second["hasMore"], second["nextCursor"])
+	}
+	data, _ := second["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("data = %v, ingin satu outfit di halaman kedua", second["data"])
+	}
+	if row, _ := data[0].(map[string]any); row["referenceId"] != seedRefID2 {
+		t.Errorf("referenceId = %v, ingin %s", row["referenceId"], seedRefID2)
+	}
+	if notFound, _ := second["notFound"].([]any); len(notFound) != 0 {
+		t.Errorf("notFound = %v, ingin kosong", second["notFound"])
+	}
+}
+
+func TestResolveOutfitsMenolakCursorRusak(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, payload := do(t, srv, request{
+		method: http.MethodPost,
+		path:   "/v1/outfits/resolve?cursor=bukan-cursor",
+		body:   map[string]any{"referenceIds": []string{seedRefID}},
+	})
+
+	requireStatus(t, resp, payload, http.StatusBadRequest)
+	requireErrorCode(t, payload, "invalid_cursor")
 }
 
 func TestTransactionMembutuhkanIdempotencyKey(t *testing.T) {
