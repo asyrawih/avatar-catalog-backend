@@ -21,6 +21,15 @@ const (
 	DefaultPageSize = 20
 	MaxPageSize     = 100
 
+	// MaxKeywordLen membatasi kata kunci pencarian nama outfit. Nama outfit
+	// sendiri dibatasi lebih pendek, jadi kata kunci yang lebih panjang dari
+	// ini pasti tidak cocok dengan apa pun.
+	MaxKeywordLen = 120
+
+	// MaxOutfitIDs membatasi jumlah outfitId yang boleh diminta sekaligus,
+	// sejalan dengan batas resolve.
+	MaxOutfitIDs = 100
+
 	// MaxItemNameLen membatasi nama item yang dilaporkan klien.
 	MaxItemNameLen = 120
 
@@ -90,8 +99,10 @@ func NewOutfits(outfits store.Outfits, templates store.Templates) *Outfits {
 
 // ListOutfitFilter menyaring daftar outfit dari sisi API.
 type ListOutfitFilter struct {
-	UserID   int64 // 0 = semua pemain
-	IsPublic *bool // nil = publik dan privat
+	UserID    int64    // 0 = semua pemain
+	IsPublic  *bool    // nil = publik dan privat
+	OutfitIDs []string // kosong = semua outfit
+	Keyword   string   // kosong = tanpa pencarian nama
 }
 
 // List mengembalikan outfit, terbaru dulu.
@@ -101,6 +112,14 @@ type ListOutfitFilter struct {
 func (s *Outfits) List(ctx context.Context, f ListOutfitFilter, rawCursor string, limit int) (OutfitPage, error) {
 	if f.UserID < 0 {
 		return OutfitPage{}, apierr.BadRequest("invalid_user_id", "Parameter userId tidak valid")
+	}
+
+	keyword := strings.TrimSpace(f.Keyword)
+	if len([]rune(keyword)) > MaxKeywordLen {
+		return OutfitPage{}, apierr.BadRequest("invalid_keyword", fmt.Sprintf("Kata kunci maksimal %d karakter", MaxKeywordLen))
+	}
+	if len(f.OutfitIDs) > MaxOutfitIDs {
+		return OutfitPage{}, apierr.BadRequest("too_many_outfit_ids", fmt.Sprintf("Maksimal %d outfitId per permintaan", MaxOutfitIDs))
 	}
 
 	var cursor paging.KeysetCursor
@@ -114,7 +133,12 @@ func (s *Outfits) List(ctx context.Context, f ListOutfitFilter, rawCursor string
 	}
 
 	limit = paging.ClampLimit(limit, DefaultPageSize, MaxPageSize)
-	rows, hasMore, err := s.outfits.List(ctx, store.OutfitFilter{UserID: f.UserID, IsPublic: f.IsPublic}, after, limit)
+	rows, hasMore, err := s.outfits.List(ctx, store.OutfitFilter{
+		UserID:    f.UserID,
+		IsPublic:  f.IsPublic,
+		OutfitIDs: f.OutfitIDs,
+		Keyword:   keyword,
+	}, after, limit)
 	if err != nil {
 		return OutfitPage{}, err
 	}

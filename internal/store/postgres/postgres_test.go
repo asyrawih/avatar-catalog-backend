@@ -267,6 +267,61 @@ func TestOutfitListBerhalamanDenganKeyset(t *testing.T) {
 	}
 }
 
+func TestOutfitListCariKeywordDanOutfitID(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	y2k := sampleOutfit("otf_test06", "550e8400-e29b-41d4-a716-446655440005", now)
+	pop := sampleOutfit("otf_test07", "550e8400-e29b-41d4-a716-446655440006", now.Add(-time.Minute))
+	pop.Name = "Girly Pop 100% Casual"
+	for _, o := range []model.Outfit{y2k, pop} {
+		if err := outfits.Create(ctx, o); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	cases := []struct {
+		name   string
+		filter store.OutfitFilter
+		want   []string
+	}{
+		{"keyword tanpa peduli huruf besar-kecil", store.OutfitFilter{Keyword: "sTrEeTwEaR"}, []string{y2k.OutfitID}},
+		{"keyword cocok sebagian", store.OutfitFilter{Keyword: "casual"}, []string{pop.OutfitID}},
+		{"persen dicari apa adanya", store.OutfitFilter{Keyword: "100%"}, []string{pop.OutfitID}},
+		// "%" hanya cocok dengan baris yang benar-benar memuatnya; kalau ia
+		// lolos sebagai wildcard, kedua outfit akan ikut terbawa.
+		{"persen bukan wildcard", store.OutfitFilter{Keyword: "%"}, []string{pop.OutfitID}},
+		{"underscore bukan wildcard", store.OutfitFilter{Keyword: "_"}, nil},
+		{"satu outfitId", store.OutfitFilter{OutfitIDs: []string{pop.OutfitID}}, []string{pop.OutfitID}},
+		{"beberapa outfitId", store.OutfitFilter{OutfitIDs: []string{y2k.OutfitID, pop.OutfitID}}, []string{y2k.OutfitID, pop.OutfitID}},
+		{"outfitId tak dikenal", store.OutfitFilter{OutfitIDs: []string{"otf_tidakada"}}, nil},
+		{"keyword dan outfitId dipadukan", store.OutfitFilter{OutfitIDs: []string{y2k.OutfitID, pop.OutfitID}, Keyword: "pop"}, []string{pop.OutfitID}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, _, err := outfits.List(ctx, tc.filter, nil, 20)
+			if err != nil {
+				t.Fatalf("List() error = %v", err)
+			}
+			got := make([]string, 0, len(rows))
+			for _, o := range rows {
+				got = append(got, o.OutfitID)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("List() = %v, ingin %v", got, tc.want)
+			}
+			for i, id := range tc.want {
+				if got[i] != id {
+					t.Fatalf("List() = %v, ingin %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestOutfitResolveMelewatiYangTerhapus(t *testing.T) {
 	pool := newPool(t)
 	outfits := postgres.NewOutfits(pool)

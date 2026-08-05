@@ -18,6 +18,5 @@ services:
 networks:
   edge:
     external: true
-    # Sesuaikan dengan network Caddy yang sudah jalan, cek dengan:
-    #   docker inspect -f '{{ range $$k, $$v := .NetworkSettings.Networks }}{{ $$k }} {{ end }}' root-caddy-1
-    name: ${EDGE_NETWORK:-root_default}
+    # Network milik stack kaneo, tempat root-caddy-1 berada.
+    name: ${EDGE_NETWORK:-root_kaneo}

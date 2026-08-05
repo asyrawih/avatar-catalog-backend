@@ -125,7 +125,7 @@ Redis dikosongkan.
 
 | Method | Path | Keterangan |
 | --- | --- | --- |
-| GET | `/v1/outfits?userId=&isPublic=&limit=&cursor=` | Daftar outfit beserta itemnya, terbaru dulu; `userId` opsional |
+| GET | `/v1/outfits?userId=&isPublic=&q=&outfitId=&limit=&cursor=` | Daftar outfit beserta itemnya, terbaru dulu; semua penyaring opsional |
 | POST | `/v1/outfits` | Buat outfit beserta `body` avatar; backend membangkitkan `referenceId` |
 | GET | `/v1/outfits/{outfitId}` | Detail outfit beserta item |
 | PATCH | `/v1/outfits/{outfitId}` | Ubah sebagian metadata, termasuk simpan `recoItemId` |
@@ -184,6 +184,21 @@ Perhatikan: selama autentikasi belum terpasang, daftar tanpa `userId` **juga
 menampilkan outfit privat milik semua pemain**. Begitu autentikasi masuk,
 daftar gabungan ini sebaiknya dibatasi — hanya `isPublic=true`, atau hanya
 untuk token layanan.
+
+**Pencarian di daftar outfit.** `q` mencocokkan sebagian nama outfit tanpa
+peduli huruf besar-kecil (`q=streetwear` menemukan "Y2K Streetwear"); `%` dan
+`_` di dalamnya dicari apa adanya, bukan sebagai wildcard. `outfitId` mengambil
+beberapa outfit sekaligus dan boleh diulang maupun dipisah koma:
+
+```bash
+curl "http://localhost:8080/v1/outfits?q=streetwear&isPublic=true"
+curl "http://localhost:8080/v1/outfits?outfitId=otf_9f2a41,otf_3c88de"
+```
+
+Keduanya bisa dipadukan dengan `userId`, `isPublic`, dan penomoran halaman.
+Batasnya: `q` maksimal 120 karakter (`invalid_keyword`) dan `outfitId` maksimal
+100 id per permintaan (`too_many_outfit_ids`). `outfitId` yang tidak ada
+menghasilkan daftar kosong, bukan 404 — beda dengan `GET /v1/outfits/{outfitId}`.
 
 **Body avatar.** Item saja tidak cukup untuk merender ulang avatar — dua outfit
 dengan item identik tetap terlihat berbeda kalau warna kulit dan skala tubuhnya

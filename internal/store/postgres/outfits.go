@@ -93,6 +93,11 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 		userID = &f.UserID
 	}
 
+	var outfitIDs []string
+	if len(f.OutfitIDs) > 0 {
+		outfitIDs = f.OutfitIDs
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		SELECT`+outfitColumns+`
 		FROM outfit o
@@ -102,9 +107,12 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 		  AND ($3::timestamptz IS NULL
 		       OR o.updated_at < $3
 		       OR (o.updated_at = $3 AND o.outfit_id > $4))
+		  AND ($6::text[] IS NULL OR o.outfit_id = ANY($6))
+		  AND ($7::text IS NULL OR o.name ILIKE $7 ESCAPE '\')
 		ORDER BY o.updated_at DESC, o.outfit_id ASC
 		LIMIT $5`,
-		userID, f.IsPublic, nullableTime(after, cursorAt), cursorID, limit+1)
+		userID, f.IsPublic, nullableTime(after, cursorAt), cursorID, limit+1,
+		outfitIDs, likePattern(f.Keyword))
 	if err != nil {
 		return nil, false, err
 	}

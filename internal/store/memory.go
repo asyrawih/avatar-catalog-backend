@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,12 @@ func (s *MemoryOutfits) List(_ context.Context, f OutfitFilter, after *paging.Ke
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	wantedIDs := make(map[string]struct{}, len(f.OutfitIDs))
+	for _, id := range f.OutfitIDs {
+		wantedIDs[id] = struct{}{}
+	}
+	keyword := strings.ToLower(f.Keyword)
+
 	matched := make([]model.Outfit, 0, len(s.rows))
 	for _, o := range s.rows {
 		if o.Deleted() {
@@ -60,6 +67,14 @@ func (s *MemoryOutfits) List(_ context.Context, f OutfitFilter, after *paging.Ke
 			continue
 		}
 		if f.IsPublic != nil && o.IsPublic != *f.IsPublic {
+			continue
+		}
+		if len(wantedIDs) > 0 {
+			if _, ok := wantedIDs[o.OutfitID]; !ok {
+				continue
+			}
+		}
+		if keyword != "" && !strings.Contains(strings.ToLower(o.Name), keyword) {
 			continue
 		}
 		if after != nil && !after.After(o.UpdatedAt, o.OutfitID) {

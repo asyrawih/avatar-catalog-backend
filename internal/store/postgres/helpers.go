@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -76,6 +77,20 @@ func nullableTime(cursor *paging.KeysetCursor, at time.Time) *time.Time {
 		return nil
 	}
 	return &at
+}
+
+// likeEscaper menetralkan wildcard ILIKE supaya keyword dicari apa adanya —
+// nama outfit boleh memuat "%" atau "_" tanpa berubah makna jadi pola.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// likePattern membungkus keyword menjadi pola "mengandung", atau nil bila
+// keyword kosong sehingga syarat pencarian di query ikut mati.
+func likePattern(keyword string) *string {
+	if keyword == "" {
+		return nil
+	}
+	pattern := "%" + likeEscaper.Replace(keyword) + "%"
+	return &pattern
 }
 
 // trimPage memotong hasil yang sengaja diambil satu lebih banyak dari limit,

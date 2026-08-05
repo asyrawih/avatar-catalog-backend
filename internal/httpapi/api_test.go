@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ const (
 	assetHair   = float64(78872304386489)
 	assetJacket = float64(14433369343)
 	seedOutfit  = "otf_9f2a41"
+	seedOutfit2 = "otf_3c88de"
 	seedUser    = "627278822"
 
 	// devRig sudah terdaftar di data contoh; newRig belum pernah dilihat backend.
@@ -316,6 +318,76 @@ func TestListOutfitsFilterIsPublic(t *testing.T) {
 	resp, salah := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?isPublic=entah"})
 	requireStatus(t, resp, salah, http.StatusBadRequest)
 	requireErrorCode(t, salah, "invalid_query")
+}
+
+func TestListOutfitsCariKeyword(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Cocok sebagian dan tanpa peduli huruf besar-kecil.
+	resp, body := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?q=streetwear"})
+	requireStatus(t, resp, body, http.StatusOK)
+	data, _ := body["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("data = %d outfit, ingin 1 yang namanya memuat streetwear", len(data))
+	}
+	row, _ := data[0].(map[string]any)
+	if row["name"] != "Y2K Streetwear" {
+		t.Errorf("name = %v, ingin Y2K Streetwear", row["name"])
+	}
+
+	// Wildcard diperlakukan sebagai teks biasa, bukan pola.
+	resp, wildcard := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?q=%25"})
+	requireStatus(t, resp, wildcard, http.StatusOK)
+	if data, _ := wildcard["data"].([]any); len(data) != 0 {
+		t.Errorf("data = %d outfit, ingin 0 — %% tidak boleh jadi wildcard", len(data))
+	}
+
+	// Keyword bisa dipadukan dengan filter lain.
+	resp, sempit := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?q=pop&isPublic=false"})
+	requireStatus(t, resp, sempit, http.StatusOK)
+	if data, _ := sempit["data"].([]any); len(data) != 1 {
+		t.Errorf("data = %d outfit, ingin 1 hasil q=pop yang privat", len(data))
+	}
+
+	resp, kepanjangan := do(t, srv, request{
+		method: http.MethodGet,
+		path:   "/v1/outfits?q=" + strings.Repeat("a", service.MaxKeywordLen+1),
+	})
+	requireStatus(t, resp, kepanjangan, http.StatusBadRequest)
+	requireErrorCode(t, kepanjangan, "invalid_keyword")
+}
+
+func TestListOutfitsFilterOutfitID(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, satu := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?outfitId=" + seedOutfit})
+	requireStatus(t, resp, satu, http.StatusOK)
+	data, _ := satu["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("data = %d outfit, ingin 1", len(data))
+	}
+	if row, _ := data[0].(map[string]any); row["outfitId"] != seedOutfit {
+		t.Errorf("outfitId = %v, ingin %s", row, seedOutfit)
+	}
+
+	// Beberapa id sekaligus, dipisah koma maupun diulang.
+	for _, path := range []string{
+		"/v1/outfits?outfitId=" + seedOutfit + "," + seedOutfit2,
+		"/v1/outfits?outfitId=" + seedOutfit + "&outfitId=" + seedOutfit2,
+	} {
+		resp, banyak := do(t, srv, request{method: http.MethodGet, path: path})
+		requireStatus(t, resp, banyak, http.StatusOK)
+		if data, _ := banyak["data"].([]any); len(data) != 2 {
+			t.Errorf("%s: data = %d outfit, ingin 2", path, len(data))
+		}
+	}
+
+	// Id yang tidak ada menghasilkan daftar kosong, bukan galat.
+	resp, kosong := do(t, srv, request{method: http.MethodGet, path: "/v1/outfits?outfitId=otf_tidakada"})
+	requireStatus(t, resp, kosong, http.StatusOK)
+	if data, _ := kosong["data"].([]any); len(data) != 0 {
+		t.Errorf("data = %d outfit, ingin 0", len(data))
+	}
 }
 
 func TestGetOutfitMembawaDetailItem(t *testing.T) {

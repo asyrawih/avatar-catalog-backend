@@ -187,6 +187,40 @@ func TestOutfitGetDilayaniCacheDanDibuangSaatUpdate(t *testing.T) {
 	}
 }
 
+// Pencarian yang berbeda tidak boleh saling meminjam entri cache.
+func TestOutfitListPencarianPunyaKunciSendiri(t *testing.T) {
+	inner := newBackends(t)
+	svc := cached.NewOutfits(inner, newFakeCache(), time.Minute, discardLogger())
+	ctx := context.Background()
+
+	filters := []store.OutfitFilter{
+		{},
+		{Keyword: "streetwear"},
+		{Keyword: "pop"},
+		{OutfitIDs: []string{seedOutfit}},
+	}
+	for _, f := range filters {
+		if _, _, err := svc.List(ctx, f, nil, 20); err != nil {
+			t.Fatalf("List(%+v) error = %v", f, err)
+		}
+	}
+	if inner.lists != len(filters) {
+		t.Fatalf("penyimpanan dipukul %d kali, ingin %d — pencarian berbagi kunci cache", inner.lists, len(filters))
+	}
+
+	// Pengulangan pencarian yang sama tetap dilayani cache.
+	rows, _, err := svc.List(ctx, store.OutfitFilter{Keyword: "streetwear"}, nil, 20)
+	if err != nil {
+		t.Fatalf("List() ulang error = %v", err)
+	}
+	if inner.lists != len(filters) {
+		t.Errorf("penyimpanan dipukul %d kali, ingin tetap %d", inner.lists, len(filters))
+	}
+	if len(rows) != 1 {
+		t.Errorf("jumlah outfit = %d, ingin 1 hasil pencarian streetwear", len(rows))
+	}
+}
+
 func TestOutfitListDibatalkanPerPemain(t *testing.T) {
 	inner := newBackends(t)
 	c := newFakeCache()

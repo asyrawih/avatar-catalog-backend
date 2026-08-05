@@ -132,6 +132,10 @@ func toModelBody(body *avatarBodyBody) *model.AvatarBody {
 //
 // userId opsional — tanpa userId daftar mencakup semua pemain. isPublic bisa
 // dipakai untuk membatasi daftar gabungan itu ke outfit yang memang publik.
+//
+// q mencari sebagian nama outfit tanpa peduli huruf besar-kecil, sedangkan
+// outfitId (boleh diulang atau dipisah koma) mengambil beberapa outfit
+// sekaligus. Keduanya bisa dipadukan dengan userId dan isPublic.
 func (h *outfitHandler) list(w http.ResponseWriter, r *http.Request) {
 	userID, err := queryInt64(r, "userId")
 	if err != nil {
@@ -149,7 +153,12 @@ func (h *outfitHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filter := service.ListOutfitFilter{UserID: userID, IsPublic: isPublic}
+	filter := service.ListOutfitFilter{
+		UserID:    userID,
+		IsPublic:  isPublic,
+		OutfitIDs: queryList(r, "outfitId"),
+		Keyword:   r.URL.Query().Get("q"),
+	}
 	page, err := h.outfits.List(r.Context(), filter, r.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		writeError(w, err)

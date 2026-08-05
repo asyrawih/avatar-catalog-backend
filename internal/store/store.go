@@ -25,6 +25,13 @@ var ErrIdempotencyConflict = errors.New("store: kunci idempotensi sudah dipakai"
 type OutfitFilter struct {
 	UserID   int64 // 0 = semua pemain
 	IsPublic *bool // nil = publik dan privat
+	// OutfitIDs membatasi daftar ke sekumpulan outfitId tertentu; kosong =
+	// semua outfit. Berguna untuk mengambil beberapa outfit sekaligus tanpa
+	// satu GET detail per id.
+	OutfitIDs []string
+	// Keyword mencocokkan sebagian nama outfit tanpa peduli huruf besar-kecil;
+	// kosong = tanpa pencarian.
+	Keyword string
 }
 
 // Outfits menyimpan OUTFIT dan OUTFIT_ITEM.

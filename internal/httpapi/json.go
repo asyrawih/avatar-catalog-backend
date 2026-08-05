@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/hanan/avatar-catalog-backend/internal/apierr"
 )
@@ -111,6 +112,29 @@ func queryBool(r *http.Request, key string) (*bool, error) {
 		return nil, apierr.BadRequest("invalid_query", "Parameter "+key+" harus true atau false")
 	}
 	return &parsed, nil
+}
+
+// queryList membaca parameter query yang boleh diulang maupun dipisah koma,
+// mis. ?outfitId=a,b atau ?outfitId=a&outfitId=b. Nilai kosong dibuang supaya
+// "a,,b" tidak berubah jadi pencarian id kosong.
+func queryList(r *http.Request, key string) []string {
+	raw := r.URL.Query()[key]
+	if len(raw) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		for _, part := range strings.Split(value, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // jsonID adalah id yang boleh dikirim sebagai string JSON maupun angka.

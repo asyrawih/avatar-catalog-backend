@@ -3,7 +3,9 @@ package cached
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hanan/avatar-catalog-backend/internal/cache"
@@ -88,7 +90,17 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 	if f.IsPublic != nil {
 		publicKey = strconv.FormatBool(*f.IsPublic)
 	}
-	key := s.listKey(ctx, f.UserID, publicKey, cursorKey, strconv.Itoa(limit))
+
+	// Pencarian ikut menentukan isi halaman, jadi keyword dan daftar id harus
+	// masuk kunci — tanpa itu hasil satu pencarian akan disajikan untuk
+	// pencarian lain yang parameter lainnya kebetulan sama.
+	searchKey := "all"
+	if f.Keyword != "" || len(f.OutfitIDs) > 0 {
+		ids := append([]string(nil), f.OutfitIDs...)
+		sort.Strings(ids)
+		searchKey = cache.HashString(f.Keyword + "|" + strings.Join(ids, ","))
+	}
+	key := s.listKey(ctx, f.UserID, publicKey, searchKey, cursorKey, strconv.Itoa(limit))
 
 	var page outfitPage
 	found, err := s.cache.Get(ctx, key, &page)
