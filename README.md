@@ -63,6 +63,29 @@ mau menggantinya. Password bawaan hanya untuk pengembangan lokal. Kalau port
 `REDIS_PORT` di `.env`; `api` tetap memanggil `db:5432` dan `redis:6379` lewat
 jaringan compose, jadi hanya akses dari host yang berubah.
 
+### Server dengan reverse proxy sendiri
+
+Kalau server sudah punya Caddy milik stack lain, `docker-compose.server.yml`
+membuat `api` menempel ke network proxy itu (alias `avatar-catalog-api`) dan
+berhenti membuka port ke host:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
+```
+
+Lupa salah satu `-f` akan me-recreate `api` tanpa network proxy. Caddy lalu
+gagal me-resolve `avatar-catalog-api` dan menjawab `502` untuk semua request —
+gejalanya mirip proxy mati, padahal proxy-nya sehat. Supaya tidak bergantung
+pada ingatan, isi `.env` **di server** dengan:
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.server.yml
+```
+
+Setelah itu `docker compose up -d` polos pun ikut override. Jangan pasang baris
+itu di `.env` lokal: network `EDGE_NETWORK` tidak ada di mesin pengembangan,
+dan override juga menutup port `8080` ke host.
+
 ### Skema
 
 [db/init/001_schema.sql](db/init/001_schema.sql) berisi 13 tabel ERD v3, dan
