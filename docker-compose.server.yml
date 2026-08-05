@@ -1,0 +1,23 @@
+# Override untuk server yang sudah punya Caddy sendiri (stack lain).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
+#
+# api ikut masuk ke network milik Caddy itu supaya bisa dipanggil dengan nama
+# container, dan tidak lagi membuka port ke host.
+services:
+  api:
+    ports: !reset []
+    networks:
+      default: null
+      edge:
+        # Nama generik seperti "api" rawan bentrok di network bersama, jadi
+        # Caddy memanggil alias ini.
+        aliases:
+          - avatar-catalog-api
+
+networks:
+  edge:
+    external: true
+    # Sesuaikan dengan network Caddy yang sudah jalan, cek dengan:
+    #   docker inspect -f '{{ range $$k, $$v := .NetworkSettings.Networks }}{{ $$k }} {{ end }}' root-caddy-1
+    name: ${EDGE_NETWORK:-root_default}
