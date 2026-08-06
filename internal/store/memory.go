@@ -17,11 +17,17 @@ import (
 type MemoryOutfits struct {
 	mu   sync.RWMutex
 	rows map[string]model.Outfit
+	// embeddings hidup terpisah dari rows: embedding bukan bagian bentuk API
+	// outfit, cuma bahan peringkat pencarian.
+	embeddings map[string][]float32
 }
 
 // NewMemoryOutfits membuat penyimpanan outfit kosong.
 func NewMemoryOutfits() *MemoryOutfits {
-	return &MemoryOutfits{rows: make(map[string]model.Outfit)}
+	return &MemoryOutfits{
+		rows:       make(map[string]model.Outfit),
+		embeddings: make(map[string][]float32),
+	}
 }
 
 var _ Outfits = (*MemoryOutfits)(nil)
@@ -129,6 +135,119 @@ func (s *MemoryOutfits) Update(_ context.Context, outfitID string, fn func(*mode
 	draft.ReferenceID = o.ReferenceID // referenceId sudah dipegang RecoService
 	s.rows[outfitID] = draft
 	return cloneOutfit(draft), nil
+}
+
+// Search mengembalikan outfit hidup terurut dari yang paling mirip dengan
+// f.Keyword, memakai kemiripan trigram yang meniru word_similarity pg_trgm
+// dengan ambang 0.3 yang sama. qEmbedding diabaikan: penyimpanan in-memory
+// tidak menyimpan embedding sebagai bahan peringkat, dan kontraknya memang
+// membolehkan pencarian leksikal saja.
+func (s *MemoryOutfits) Search(_ context.Context, f OutfitFilter, _ []float32, limit int) ([]model.Outfit, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	type scored struct {
+		outfit model.Outfit
+		sim    float64
+	}
+
+	var matched []scored
+	for _, o := range s.rows {
+		if o.Deleted() {
+			continue
+		}
+		if f.UserID != 0 && o.UserID != f.UserID {
+			continue
+		}
+		if f.IsPublic != nil && o.IsPublic != *f.IsPublic {
+			continue
+		}
+		sim := wordSimilarity(f.Keyword, o.Name)
+		if sim < 0.3 {
+			continue
+		}
+		matched = append(matched, scored{outfit: cloneOutfit(o), sim: sim})
+	}
+
+	sort.Slice(matched, func(i, j int) bool {
+		if matched[i].sim != matched[j].sim {
+			return matched[i].sim > matched[j].sim
+		}
+		if !matched[i].outfit.UpdatedAt.Equal(matched[j].outfit.UpdatedAt) {
+			return matched[i].outfit.UpdatedAt.After(matched[j].outfit.UpdatedAt)
+		}
+		return matched[i].outfit.OutfitID < matched[j].outfit.OutfitID
+	})
+
+	if limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+	out := make([]model.Outfit, 0, len(matched))
+	for _, m := range matched {
+		out = append(out, m.outfit)
+	}
+	return out, nil
+}
+
+// SetNameEmbedding menyimpan embedding nama sebuah outfit.
+func (s *MemoryOutfits) SetNameEmbedding(_ context.Context, outfitID string, embedding []float32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.rows[outfitID]; !ok {
+		return ErrNotFound
+	}
+	s.embeddings[outfitID] = append([]float32(nil), embedding...)
+	return nil
+}
+
+// wordSimilarity mendekati word_similarity pg_trgm: kemiripan terbaik antara
+// query dengan nama utuh maupun tiap katanya, dihitung sebagai Jaccard atas
+// himpunan trigram. Cukup dekat untuk test dan mode tanpa Postgres; peringkat
+// persisnya tetap milik implementasi Postgres.
+func wordSimilarity(query, name string) float64 {
+	q := trigrams(query)
+	if len(q) == 0 {
+		return 0
+	}
+
+	best := trigramJaccard(q, trigrams(name))
+	for word := range strings.FieldsSeq(name) {
+		if sim := trigramJaccard(q, trigrams(word)); sim > best {
+			best = sim
+		}
+	}
+	return best
+}
+
+// trigrams membentuk himpunan trigram gaya pg_trgm: huruf kecil, tiap kata
+// diberi dua spasi pembuka dan satu penutup.
+func trigrams(text string) map[string]struct{} {
+	out := make(map[string]struct{})
+	for word := range strings.FieldsSeq(strings.ToLower(text)) {
+		padded := []rune("  " + word + " ")
+		for i := 0; i+3 <= len(padded); i++ {
+			out[string(padded[i:i+3])] = struct{}{}
+		}
+	}
+	return out
+}
+
+func trigramJaccard(a, b map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+
+	shared := 0
+	for t := range a {
+		if _, ok := b[t]; ok {
+			shared++
+		}
+	}
+	if shared == 0 {
+		return 0
+	}
+	return float64(shared) / float64(len(a)+len(b)-shared)
 }
 
 // --- TRANSACTION ----------------------------------------------------------

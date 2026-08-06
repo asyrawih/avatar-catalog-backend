@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -127,6 +129,111 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 		return nil, false, err
 	}
 	return outfits, hasMore, nil
+}
+
+// Search mengembalikan outfit hidup terurut dari yang paling mirip dengan
+// f.Keyword, menggabungkan dua peringkat dengan Reciprocal Rank Fusion:
+//
+//   - leksikal : word_similarity pg_trgm — "zepeto" tetap menemukan
+//     "Aiche ZAPPETO" walau salah ketik. Operator <% memakai
+//     outfit_name_trgm_idx; ambangnya diset 0.3 di level database
+//     (lihat db/init/001_schema.sql).
+//   - semantik : jarak cosine pgvector di name_embedding — "jaket" bisa
+//     menemukan "Jacket". Hanya ikut bila qEmbedding terisi DAN barisnya
+//     sudah di-embed; selain itu cabang ini kosong dan pencarian tetap
+//     jalan leksikal saja.
+//
+// Konstanta 60 pada RRF adalah nilai baku dari papernya; kedua cabang
+// dibatasi 50 kandidat supaya fusi bekerja pada kandidat terbaik saja.
+func (s *Outfits) Search(ctx context.Context, f store.OutfitFilter, qEmbedding []float32, limit int) ([]model.Outfit, error) {
+	var userID *int64
+	if f.UserID != 0 {
+		userID = &f.UserID
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		WITH lexical AS (
+			SELECT o.outfit_id,
+			       row_number() OVER (
+			           ORDER BY word_similarity($1, o.name) DESC, o.updated_at DESC, o.outfit_id
+			       ) AS rank
+			FROM outfit o
+			WHERE o.deleted_at IS NULL
+			  AND ($2::bigint IS NULL OR o.user_id = $2)
+			  AND ($3::boolean IS NULL OR o.is_public = $3)
+			  AND $1 <% o.name
+			ORDER BY rank
+			LIMIT 50
+		),
+		semantic AS (
+			SELECT o.outfit_id,
+			       row_number() OVER (
+			           ORDER BY o.name_embedding <=> $4::vector, o.outfit_id
+			       ) AS rank
+			FROM outfit o
+			WHERE o.deleted_at IS NULL
+			  AND ($2::bigint IS NULL OR o.user_id = $2)
+			  AND ($3::boolean IS NULL OR o.is_public = $3)
+			  AND o.name_embedding IS NOT NULL
+			  AND $4::text IS NOT NULL
+			ORDER BY rank
+			LIMIT 50
+		)
+		SELECT`+outfitColumns+`
+		FROM lexical l
+		FULL JOIN semantic s USING (outfit_id)
+		JOIN outfit o USING (outfit_id)
+		ORDER BY coalesce(1.0/(60 + l.rank), 0) + coalesce(1.0/(60 + s.rank), 0) DESC,
+		         o.updated_at DESC, o.outfit_id
+		LIMIT $5`,
+		f.Keyword, userID, f.IsPublic, vectorLiteral(qEmbedding), limit)
+	if err != nil {
+		return nil, err
+	}
+
+	outfits, err := collectOutfits(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachItems(ctx, outfits); err != nil {
+		return nil, err
+	}
+	return outfits, nil
+}
+
+// SetNameEmbedding menyimpan embedding nama sebuah outfit.
+func (s *Outfits) SetNameEmbedding(ctx context.Context, outfitID string, embedding []float32) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE outfit SET name_embedding = $2::vector WHERE outfit_id = $1`,
+		outfitID, vectorLiteral(embedding))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// vectorLiteral menuliskan embedding dalam bentuk teks pgvector ("[1,2,3]").
+// Lewat teks supaya tidak perlu mendaftarkan tipe vector di pgx; nil menjadi
+// NULL sehingga cabang semantik query pencarian kosong dengan sendirinya.
+func vectorLiteral(embedding []float32) *string {
+	if len(embedding) == 0 {
+		return nil
+	}
+
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, v := range embedding {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+	}
+	b.WriteByte(']')
+	out := b.String()
+	return &out
 }
 
 // ListByReferenceIDs mengembalikan outfit hidup untuk sekumpulan referenceId.

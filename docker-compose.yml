@@ -2,7 +2,9 @@ name: avatar-catalog
 
 services:
   db:
-    image: postgres:17-alpine
+    # pgvector/pgvector = postgres resmi + extension vector; dibutuhkan kolom
+    # OUTFIT.name_embedding. Volume data dari image postgres:17 tetap kompatibel.
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-avatar_catalog}

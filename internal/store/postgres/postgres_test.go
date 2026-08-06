@@ -503,3 +503,63 @@ func TestTemplateListDanUpdate(t *testing.T) {
 		t.Errorf("Update() rig tak dikenal error = %v, ingin store.ErrNotFound", err)
 	}
 }
+
+// TestOutfitSearchTrigramDanEmbedding menguji jalur pencarian hybrid: salah
+// ketik ditangkap trigram, dan embedding — bila ada — ikut mengangkat
+// peringkat lewat RRF.
+func TestOutfitSearchTrigramDanEmbedding(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	zappeto := sampleOutfit("otf_test20", "550e8400-e29b-41d4-a716-446655440020", now)
+	zappeto.Name = "Aiche ZAPPETO"
+	other := sampleOutfit("otf_test21", "550e8400-e29b-41d4-a716-446655440021", now.Add(-time.Minute))
+	other.Name = "Girly Pop Casual"
+	for _, o := range []model.Outfit{zappeto, other} {
+		if err := outfits.Create(ctx, o); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	// Salah ketik tetap menemukan lewat trigram, tanpa embedding sama sekali.
+	for _, q := range []string{"zappeto", "zepeto", "zeppeto"} {
+		rows, err := outfits.Search(ctx, store.OutfitFilter{Keyword: q}, nil, 10)
+		if err != nil {
+			t.Fatalf("Search(%q) error = %v", q, err)
+		}
+		if len(rows) == 0 || rows[0].OutfitID != zappeto.OutfitID {
+			t.Errorf("Search(%q) = %d baris, ingin %s di urutan pertama", q, len(rows), zappeto.OutfitID)
+		}
+	}
+
+	// Kata yang sama sekali tidak mirip tidak boleh ikut.
+	rows, err := outfits.Search(ctx, store.OutfitFilter{Keyword: "naga merah"}, nil, 10)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("Search(naga merah) = %d baris, ingin 0", len(rows))
+	}
+
+	// Cabang semantik: setelah embedding tersimpan, query dengan vector yang
+	// searah menemukan baris itu walau kata kuncinya tidak mirip sama sekali.
+	embedding := make([]float32, 1536)
+	embedding[0] = 1
+	if err := outfits.SetNameEmbedding(ctx, zappeto.OutfitID, embedding); err != nil {
+		t.Fatalf("SetNameEmbedding() error = %v", err)
+	}
+	rows, err = outfits.Search(ctx, store.OutfitFilter{Keyword: "kata tak mirip"}, embedding, 10)
+	if err != nil {
+		t.Fatalf("Search() dengan embedding error = %v", err)
+	}
+	if len(rows) != 1 || rows[0].OutfitID != zappeto.OutfitID {
+		t.Fatalf("Search() semantik = %+v, ingin hanya %s", rows, zappeto.OutfitID)
+	}
+
+	// SetNameEmbedding ke outfit yang tidak ada harus ErrNotFound.
+	if err := outfits.SetNameEmbedding(ctx, "otf_tidakada", embedding); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("SetNameEmbedding(tak dikenal) error = %v, ingin ErrNotFound", err)
+	}
+}

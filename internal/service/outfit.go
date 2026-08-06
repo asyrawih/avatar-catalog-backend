@@ -84,9 +84,11 @@ type UpdateOutfitInput struct {
 type Outfits struct {
 	outfits   store.Outfits
 	templates store.Templates
-	now       func() time.Time
-	newID     func() string
-	newRefID  func() string
+	// embedder opsional; nil berarti pencarian leksikal saja. Lihat embed.go.
+	embedder Embedder
+	now      func() time.Time
+	newID    func() string
+	newRefID func() string
 }
 
 // NewOutfits merangkai service outfit.
@@ -98,6 +100,13 @@ func NewOutfits(outfits store.Outfits, templates store.Templates) *Outfits {
 		newID:     newOutfitID,
 		newRefID:  newUUID,
 	}
+}
+
+// WithEmbedder memasang penyedia embedding untuk pencarian makna lintas bahasa
+// dan mengembalikan service yang sama agar bisa dirangkai saat perakitan.
+func (s *Outfits) WithEmbedder(e Embedder) *Outfits {
+	s.embedder = e
+	return s
 }
 
 // ListOutfitFilter menyaring daftar outfit dari sisi API.
@@ -157,6 +166,38 @@ func (s *Outfits) List(ctx context.Context, f ListOutfitFilter, rawCursor string
 	return page, nil
 }
 
+// SearchOutfitFilter menyaring pencarian outfit dari sisi API.
+type SearchOutfitFilter struct {
+	Query    string
+	UserID   int64 // 0 = semua pemain
+	IsPublic *bool // nil = publik dan privat
+}
+
+// Search mengembalikan outfit terurut dari yang paling mirip dengan Query —
+// toleran salah ketik lewat trigram, dan bila embedder terpasang juga mirip
+// secara makna lintas bahasa. Hasilnya peringkat, bukan halaman: pencarian
+// yang relevan habis di urutan awal, jadi tidak ada cursor.
+func (s *Outfits) Search(ctx context.Context, f SearchOutfitFilter, limit int) ([]model.Outfit, error) {
+	if f.UserID < 0 {
+		return nil, apierr.BadRequest("invalid_user_id", "Parameter userId tidak valid")
+	}
+
+	query := strings.TrimSpace(f.Query)
+	if len([]rune(query)) < 2 {
+		return nil, apierr.BadRequest("invalid_query", "Parameter q minimal 2 karakter")
+	}
+	if len([]rune(query)) > MaxKeywordLen {
+		return nil, apierr.BadRequest("invalid_query", fmt.Sprintf("Parameter q maksimal %d karakter", MaxKeywordLen))
+	}
+
+	limit = paging.ClampLimit(limit, DefaultPageSize, MaxPageSize)
+	return s.outfits.Search(ctx, store.OutfitFilter{
+		UserID:   f.UserID,
+		IsPublic: f.IsPublic,
+		Keyword:  query,
+	}, s.queryEmbedding(ctx, query), limit)
+}
+
 // Get mengembalikan satu outfit lengkap dengan itemnya.
 func (s *Outfits) Get(ctx context.Context, outfitID string) (model.Outfit, error) {
 	return s.load(ctx, outfitID)
@@ -209,6 +250,7 @@ func (s *Outfits) Create(ctx context.Context, in CreateOutfitInput) (model.Outfi
 	if err := s.outfits.Create(ctx, outfit); err != nil {
 		return model.Outfit{}, err
 	}
+	s.embedNameAsync(outfit.OutfitID, outfit.Name)
 	return outfit, nil
 }
 
@@ -238,7 +280,7 @@ func (s *Outfits) Update(ctx context.Context, actor Actor, outfitID string, in U
 		return model.Outfit{}, apierr.Unprocessable("missing_name", "Field name tidak boleh kosong")
 	}
 
-	return s.outfits.Update(ctx, outfitID, func(o *model.Outfit) error {
+	updated, err := s.outfits.Update(ctx, outfitID, func(o *model.Outfit) error {
 		if in.Name != nil {
 			o.Name = strings.TrimSpace(*in.Name)
 		}
@@ -258,6 +300,13 @@ func (s *Outfits) Update(ctx context.Context, actor Actor, outfitID string, in U
 		o.UpdatedAt = s.now()
 		return nil
 	})
+	if err != nil {
+		return model.Outfit{}, err
+	}
+	if in.Name != nil && updated.Name != current.Name {
+		s.embedNameAsync(updated.OutfitID, updated.Name)
+	}
+	return updated, nil
 }
 
 // ReplaceItems mengganti seluruh isi item outfit.

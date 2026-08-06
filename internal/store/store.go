@@ -47,6 +47,16 @@ type Outfits interface {
 	ListByReferenceIDs(ctx context.Context, referenceIDs []string) ([]model.Outfit, error)
 	// Update menerapkan fn pada outfit yang tersimpan lalu menyimpan hasilnya.
 	Update(ctx context.Context, outfitID string, fn func(*model.Outfit) error) (model.Outfit, error)
+	// Search mengembalikan outfit hidup terurut dari yang paling mirip dengan
+	// f.Keyword — toleran salah ketik (trigram) dan, bila qEmbedding terisi,
+	// juga mirip secara makna (cosine di embedding nama). qEmbedding nil
+	// berarti pencarian leksikal saja; f.OutfitIDs diabaikan. Hasilnya
+	// peringkat, bukan halaman, jadi tidak ada cursor.
+	Search(ctx context.Context, f OutfitFilter, qEmbedding []float32, limit int) ([]model.Outfit, error)
+	// SetNameEmbedding menyimpan embedding nama sebuah outfit. Dipanggil
+	// asinkron setelah create/rename; kegagalannya tidak menggagalkan
+	// penulisan outfit itu sendiri.
+	SetNameEmbedding(ctx context.Context, outfitID string, embedding []float32) error
 }
 
 // Transactions menyimpan TRANSACTION dan TRANSACTION_ITEM.

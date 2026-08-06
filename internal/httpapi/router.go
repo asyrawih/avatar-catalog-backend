@@ -62,6 +62,9 @@ func NewRouter(deps Deps) http.Handler {
 	mux.Handle("POST /v1/outfits", chain(http.HandlerFunc(outfits.create),
 		idempotent(deps.Idempotency, "outfits.create", false)))
 	mux.HandleFunc("POST /v1/outfits/resolve", outfits.resolve)
+	// Terdaftar sebelum {outfitId} secara makna: mux Go 1.22 memilih pola
+	// literal "search" di atas wildcard, jadi tidak bentrok.
+	mux.HandleFunc("GET /v1/outfits/search", outfits.search)
 	mux.HandleFunc("GET /v1/outfits/{outfitId}", outfits.get)
 	mux.HandleFunc("PATCH /v1/outfits/{outfitId}", outfits.update)
 	mux.HandleFunc("DELETE /v1/outfits/{outfitId}", outfits.remove)

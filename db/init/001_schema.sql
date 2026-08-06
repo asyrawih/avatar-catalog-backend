@@ -10,6 +10,20 @@
 
 BEGIN;
 
+-- --- Extension pencarian ----------------------------------------------------
+
+-- pg_trgm melayani pencarian nama yang toleran salah ketik; vector (pgvector)
+-- menyimpan embedding nama untuk pencarian makna lintas bahasa.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Operator <% (word_similarity) dipakai query pencarian; ambang bawaannya 0.6
+-- terlalu ketat untuk salah ketik ("zepeto" vs "ZAPPETO" cuma ~0.4), jadi
+-- diturunkan ke 0.3 di level database supaya berlaku untuk semua koneksi.
+DO $$ BEGIN
+    EXECUTE format('ALTER DATABASE %I SET pg_trgm.word_similarity_threshold = 0.3', current_database());
+END $$;
+
 -- --- Pemain dan rig dasar ---------------------------------------------------
 
 -- Backend hanya tahu userId saat outfit atau transaksi pertama masuk; username
@@ -66,7 +80,12 @@ CREATE TABLE outfit (
     updated_at   timestamptz NOT NULL DEFAULT now(),
     -- Soft delete: baris tidak pernah dihapus supaya referenceId yang sudah
     -- beredar di feed tetap bisa dijelaskan (410, bukan 404).
-    deleted_at   timestamptz
+    deleted_at   timestamptz,
+    -- Embedding nama untuk pencarian makna lintas bahasa. NULL berarti belum
+    -- (atau tidak akan) di-embed — pencarian tetap jalan lewat jalur trigram,
+    -- jadi kolom ini murni peningkatan, bukan ketergantungan. Dimensi 1536
+    -- mengikuti model text-embedding-3-small; ganti model = re-embed semua.
+    name_embedding vector(1536)
 );
 
 -- Daftar outfit pemain memakai cursor keyset (updated_at desc, outfit_id).
@@ -79,6 +98,16 @@ CREATE INDEX outfit_user_recent_idx
 CREATE INDEX outfit_recent_idx
     ON outfit (updated_at DESC, outfit_id)
     WHERE deleted_at IS NULL;
+
+-- Pencarian nama toleran salah ketik lewat operator trigram (<%).
+CREATE INDEX outfit_name_trgm_idx
+    ON outfit USING gin (name gin_trgm_ops);
+
+-- Pencarian tetangga terdekat cosine di embedding nama. Parsial: baris yang
+-- belum di-embed tidak membebani index.
+CREATE INDEX outfit_name_hnsw_idx
+    ON outfit USING hnsw (name_embedding vector_cosine_ops)
+    WHERE deleted_at IS NULL AND name_embedding IS NOT NULL;
 
 -- Detail item disimpan di sini, bukan di tabel katalog terpisah. Nilainya
 -- dilaporkan klien dari AvatarEditorService dan dipakai apa adanya untuk

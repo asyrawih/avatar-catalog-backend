@@ -119,6 +119,44 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 	return outfits, hasMore, nil
 }
 
+// Search mengembalikan hasil pencarian, lewat cache bila tersedia. Kuncinya
+// cukup keyword + filter + limit: qEmbedding diturunkan dari keyword yang sama,
+// jadi tidak menambah pembeda.
+func (s *Outfits) Search(ctx context.Context, f store.OutfitFilter, qEmbedding []float32, limit int) ([]model.Outfit, error) {
+	publicKey := "all"
+	if f.IsPublic != nil {
+		publicKey = strconv.FormatBool(*f.IsPublic)
+	}
+	key := s.versionedKey(ctx, "search", strconv.FormatInt(f.UserID, 10),
+		publicKey, cache.HashString(f.Keyword), strconv.Itoa(limit))
+
+	var cachedRows []model.Outfit
+	found, err := s.cache.Get(ctx, key, &cachedRows)
+	if err != nil {
+		s.logger.Warn("gagal membaca cache pencarian outfit", "err", err)
+	}
+	if found {
+		return cachedRows, nil
+	}
+
+	rows, err := s.inner.Search(ctx, f, qEmbedding, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.set(ctx, key, rows)
+	return rows, nil
+}
+
+// SetNameEmbedding meneruskan penulisan lalu membatalkan seluruh cache outfit:
+// embedding baru bisa mengubah peringkat hasil pencarian yang sudah ter-cache.
+func (s *Outfits) SetNameEmbedding(ctx context.Context, outfitID string, embedding []float32) error {
+	if err := s.inner.SetNameEmbedding(ctx, outfitID, embedding); err != nil {
+		return err
+	}
+	s.invalidateAll(ctx)
+	return nil
+}
+
 // ListByReferenceIDs diteruskan tanpa cache.
 //
 // Feed rekomendasi mengirim kombinasi referenceId yang hampir selalu berbeda,

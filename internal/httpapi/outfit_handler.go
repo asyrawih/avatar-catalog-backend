@@ -167,6 +167,41 @@ func (h *outfitHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newListEnvelope(newOutfitSummaries(page.Outfits), page.NextCursor, page.HasMore))
 }
 
+// search menangani GET /v1/outfits/search.
+//
+// Beda dengan q pada GET /v1/outfits yang mencocokkan sebagian nama apa
+// adanya, endpoint ini toleran salah ketik ("zepeto" menemukan "Aiche
+// ZAPPETO") dan mengurutkan hasil dari yang paling mirip. Hasilnya peringkat,
+// bukan halaman, jadi tidak ada cursor.
+func (h *outfitHandler) search(w http.ResponseWriter, r *http.Request) {
+	userID, err := queryInt64(r, "userId")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	limit, err := queryInt(r, "limit", 0)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	isPublic, err := queryBool(r, "isPublic")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	rows, err := h.outfits.Search(r.Context(), service.SearchOutfitFilter{
+		Query:    r.URL.Query().Get("q"),
+		UserID:   userID,
+		IsPublic: isPublic,
+	}, limit)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newListEnvelope(newOutfitSummaries(rows), "", false))
+}
+
 // get menangani GET /v1/outfits/{outfitId}.
 func (h *outfitHandler) get(w http.ResponseWriter, r *http.Request) {
 	detail, err := h.outfits.Get(r.Context(), r.PathValue("outfitId"))
