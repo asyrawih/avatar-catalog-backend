@@ -43,30 +43,32 @@ type resolveEnvelope struct {
 // itemCount dipertahankan supaya klien yang cuma butuh jumlah tidak ikut
 // berubah.
 type outfitSummaryDTO struct {
-	OutfitID    string          `json:"outfitId"`
-	ReferenceID string          `json:"referenceId"`
-	UserID      int64           `json:"userId"`
-	Name        string          `json:"name"`
-	TemplateID  string          `json:"templateId"`
-	IsPublic    bool            `json:"isPublic"`
-	ItemCount   int             `json:"itemCount"`
-	Items       []outfitItemDTO `json:"items"`
-	Body        *avatarBodyDTO  `json:"body"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
+	OutfitID         string          `json:"outfitId"`
+	ReferenceID      string          `json:"referenceId"`
+	UserID           int64           `json:"userId"`
+	Name             string          `json:"name"`
+	TemplateID       string          `json:"templateId"`
+	IsPublic         bool            `json:"isPublic"`
+	ItemCount        int             `json:"itemCount"`
+	Items            []outfitItemDTO `json:"items"`
+	Body             *avatarBodyDTO  `json:"body"`
+	ThumbnailAssetID int64           `json:"thumbnailAssetId,omitempty"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
 }
 
 func newOutfitSummary(o model.Outfit) outfitSummaryDTO {
 	return outfitSummaryDTO{
-		OutfitID:    o.OutfitID,
-		ReferenceID: o.ReferenceID,
-		UserID:      o.UserID,
-		Name:        o.Name,
-		TemplateID:  o.TemplateID,
-		IsPublic:    o.IsPublic,
-		ItemCount:   len(o.Items),
-		Items:       newOutfitItems(o.Items),
-		Body:        newAvatarBody(o.Body),
-		UpdatedAt:   o.UpdatedAt,
+		OutfitID:         o.OutfitID,
+		ReferenceID:      o.ReferenceID,
+		UserID:           o.UserID,
+		Name:             o.Name,
+		TemplateID:       o.TemplateID,
+		IsPublic:         o.IsPublic,
+		ItemCount:        len(o.Items),
+		Items:            newOutfitItems(o.Items),
+		Body:             newAvatarBody(o.Body),
+		ThumbnailAssetID: o.ThumbnailAssetID,
+		UpdatedAt:        o.UpdatedAt,
 	}
 }
 
@@ -140,21 +142,27 @@ type outfitItemDTO struct {
 	Name      string `json:"name"`
 	AssetType string `json:"assetType"`
 	Price     int    `json:"price"`
+	// Terisi hanya pada bagian paket. price bagian paket adalah harga bundle
+	// induk yang terulang di tiap bagiannya — penjumlah wajib menghitung per
+	// bundleId sekali.
+	BundleID   int64  `json:"bundleId,omitempty"`
+	BundleName string `json:"bundleName,omitempty"`
 }
 
 type outfitDetailDTO struct {
-	OutfitID    string          `json:"outfitId"`
-	ReferenceID string          `json:"referenceId"`
-	RecoItemID  any             `json:"recoItemId"`
-	UserID      int64           `json:"userId"`
-	TemplateID  string          `json:"templateId"`
-	Name        string          `json:"name"`
-	IsPublic    bool            `json:"isPublic"`
-	CustomTags  []string        `json:"customTags"`
-	Items       []outfitItemDTO `json:"items"`
-	Body        *avatarBodyDTO  `json:"body"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
+	OutfitID         string          `json:"outfitId"`
+	ReferenceID      string          `json:"referenceId"`
+	RecoItemID       any             `json:"recoItemId"`
+	UserID           int64           `json:"userId"`
+	TemplateID       string          `json:"templateId"`
+	Name             string          `json:"name"`
+	IsPublic         bool            `json:"isPublic"`
+	CustomTags       []string        `json:"customTags"`
+	Items            []outfitItemDTO `json:"items"`
+	Body             *avatarBodyDTO  `json:"body"`
+	ThumbnailAssetID int64           `json:"thumbnailAssetId,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
 }
 
 // newOutfitItems selalu mengembalikan slice tidak nil supaya outfit kosong
@@ -163,11 +171,13 @@ func newOutfitItems(items []model.OutfitItem) []outfitItemDTO {
 	out := make([]outfitItemDTO, 0, len(items))
 	for _, item := range items {
 		out = append(out, outfitItemDTO{
-			AssetID:   item.AssetID,
-			Slot:      item.Slot,
-			Name:      item.Name,
-			AssetType: item.AssetType,
-			Price:     item.Price,
+			AssetID:    item.AssetID,
+			Slot:       item.Slot,
+			Name:       item.Name,
+			AssetType:  item.AssetType,
+			Price:      item.Price,
+			BundleID:   item.BundleID,
+			BundleName: item.BundleName,
 		})
 	}
 	return out
@@ -175,18 +185,19 @@ func newOutfitItems(items []model.OutfitItem) []outfitItemDTO {
 
 func newOutfitDetail(o model.Outfit) outfitDetailDTO {
 	return outfitDetailDTO{
-		OutfitID:    o.OutfitID,
-		ReferenceID: o.ReferenceID,
-		RecoItemID:  nullableString(o.RecoItemID),
-		UserID:      o.UserID,
-		TemplateID:  o.TemplateID,
-		Name:        o.Name,
-		IsPublic:    o.IsPublic,
-		CustomTags:  o.CustomTags,
-		Items:       newOutfitItems(o.Items),
-		Body:        newAvatarBody(o.Body),
-		CreatedAt:   o.CreatedAt,
-		UpdatedAt:   o.UpdatedAt,
+		OutfitID:         o.OutfitID,
+		ReferenceID:      o.ReferenceID,
+		RecoItemID:       nullableString(o.RecoItemID),
+		UserID:           o.UserID,
+		TemplateID:       o.TemplateID,
+		Name:             o.Name,
+		IsPublic:         o.IsPublic,
+		CustomTags:       o.CustomTags,
+		Items:            newOutfitItems(o.Items),
+		Body:             newAvatarBody(o.Body),
+		ThumbnailAssetID: o.ThumbnailAssetID,
+		CreatedAt:        o.CreatedAt,
+		UpdatedAt:        o.UpdatedAt,
 	}
 }
 

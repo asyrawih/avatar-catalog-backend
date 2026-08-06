@@ -16,6 +16,10 @@ type txItemBody struct {
 	AssetID int64          `json:"assetId"`
 	Price   int            `json:"price"`
 	Result  model.TxResult `json:"result"`
+	// bundleId opsional, terisi pada bagian paket: price-nya adalah harga
+	// bundle induk yang terulang per bagian, dan perhitungan spend (dasar
+	// cashback) menghitung tiap bundleId sekali.
+	BundleID int64 `json:"bundleId"`
 }
 
 type createTxBody struct {
@@ -37,7 +41,9 @@ func (h *transactionHandler) create(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]model.TransactionItem, 0, len(body.Items))
 	for _, item := range body.Items {
-		items = append(items, model.TransactionItem{AssetID: item.AssetID, Price: item.Price, Result: item.Result})
+		items = append(items, model.TransactionItem{
+			AssetID: item.AssetID, Price: item.Price, Result: item.Result, BundleID: item.BundleID,
+		})
 	}
 
 	tx, replay, err := h.transactions.Create(r.Context(), service.CreateTransactionInput{

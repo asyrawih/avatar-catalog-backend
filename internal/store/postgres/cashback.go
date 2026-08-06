@@ -35,14 +35,24 @@ const entryColumns = `
 func (s *Cashback) SpendStats(ctx context.Context, userID int64, excludeTxID string, daysSince time.Time) (store.SpendStats, error) {
 	stats := store.SpendStats{SpendDays: make(map[string]bool)}
 
+	// Bagian paket membawa harga bundle induk yang terulang per bagian, jadi
+	// spend menghitung tiap (tx, bundle) sekali — baris pertama tiap kelompok
+	// yang dihitung; item satuan (bundle_id NULL) dihitung semua.
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(ti.price), 0), COUNT(DISTINCT t.tx_id)
-		FROM transaction t
-		JOIN transaction_item ti ON ti.tx_id = t.tx_id
-		WHERE t.user_id = $1
-		  AND ti.result = 'success'
-		  AND ti.price > 0
-		  AND t.tx_id <> $2`,
+		SELECT COALESCE(SUM(price), 0), COUNT(DISTINCT tx_id)
+		FROM (
+			SELECT t.tx_id, ti.price,
+			       ti.bundle_id IS NULL
+			           OR row_number() OVER (PARTITION BY t.tx_id, ti.bundle_id
+			                                 ORDER BY ti.asset_id) = 1 AS counted
+			FROM transaction t
+			JOIN transaction_item ti ON ti.tx_id = t.tx_id
+			WHERE t.user_id = $1
+			  AND ti.result = 'success'
+			  AND ti.price > 0
+			  AND t.tx_id <> $2
+		) spend
+		WHERE counted`,
 		userID, excludeTxID).Scan(&stats.LifetimeSpend, &stats.PurchaseCount)
 	if err != nil {
 		return store.SpendStats{}, err

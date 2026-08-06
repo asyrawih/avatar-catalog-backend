@@ -85,7 +85,10 @@ CREATE TABLE outfit (
     -- (atau tidak akan) di-embed — pencarian tetap jalan lewat jalur trigram,
     -- jadi kolom ini murni peningkatan, bukan ketergantungan. Dimensi 1536
     -- mengikuti model text-embedding-3-small; ganti model = re-embed semua.
-    name_embedding vector(1536)
+    name_embedding vector(1536),
+    -- Asset id thumbnail outfit hasil upload game server; NULL berarti klien
+    -- tidak melaporkannya.
+    thumbnail_asset_id bigint
 );
 
 -- Daftar outfit pemain memakai cursor keyset (updated_at desc, outfit_id).
@@ -122,6 +125,12 @@ CREATE TABLE outfit_item (
     name       text    NOT NULL DEFAULT '',
     asset_type text    NOT NULL DEFAULT '',
     price      integer NOT NULL DEFAULT 0 CHECK (price >= 0),
+    -- bundle_id terisi menandai item sebagai bagian sebuah paket Roblox, dan
+    -- price-nya adalah HARGA BUNDLE INDUK yang terulang di tiap bagiannya —
+    -- pembaca yang menjumlahkan harga wajib menghitung per bundle_id sekali.
+    -- NULL berarti item satuan biasa.
+    bundle_id   bigint,
+    bundle_name text NOT NULL DEFAULT '',
     PRIMARY KEY (outfit_id, asset_id)
 );
 
@@ -157,6 +166,10 @@ CREATE TABLE transaction_item (
     asset_id bigint  NOT NULL,
     price    integer NOT NULL DEFAULT 0 CHECK (price >= 0),
     result   text    NOT NULL CHECK (result IN ('success', 'aborted', 'failed')),
+    -- Semantik sama dengan outfit_item.bundle_id: terisi berarti bagian paket
+    -- dengan price = harga bundle induk yang terulang per bagian. Perhitungan
+    -- spend (dasar cashback) menghitung tiap bundle_id sekali per transaksi.
+    bundle_id bigint,
     PRIMARY KEY (tx_id, asset_id)
 );
 

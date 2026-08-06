@@ -25,6 +25,10 @@ type outfitItemBody struct {
 	Name      string `json:"name"`
 	AssetType string `json:"assetType"`
 	Price     int    `json:"price"`
+	// bundleId/bundleName opsional, terisi pada bagian paket. price bagian
+	// paket adalah harga bundle induk yang terulang di tiap bagiannya.
+	BundleID   int64  `json:"bundleId"`
+	BundleName string `json:"bundleName"`
 }
 
 // avatarBodyBody menerima bentuk body yang sama persis dengan yang dikeluarkan
@@ -65,6 +69,9 @@ type createOutfitBody struct {
 	CustomTags []string         `json:"customTags"`
 	Items      []outfitItemBody `json:"items"`
 	Body       *avatarBodyBody  `json:"body"`
+	// thumbnailAssetId opsional: asset id thumbnail outfit hasil upload game
+	// server.
+	ThumbnailAssetID int64 `json:"thumbnailAssetId"`
 }
 
 type updateOutfitBody struct {
@@ -87,11 +94,13 @@ func toModelItems(items []outfitItemBody) []model.OutfitItem {
 	out := make([]model.OutfitItem, 0, len(items))
 	for _, item := range items {
 		out = append(out, model.OutfitItem{
-			AssetID:   item.AssetID,
-			Slot:      item.Slot,
-			Name:      item.Name,
-			AssetType: item.AssetType,
-			Price:     item.Price,
+			AssetID:    item.AssetID,
+			Slot:       item.Slot,
+			Name:       item.Name,
+			AssetType:  item.AssetType,
+			Price:      item.Price,
+			BundleID:   item.BundleID,
+			BundleName: item.BundleName,
 		})
 	}
 	return out
@@ -220,13 +229,14 @@ func (h *outfitHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outfit, err := h.outfits.Create(r.Context(), service.CreateOutfitInput{
-		UserID:     body.UserID,
-		TemplateID: body.TemplateID.String(),
-		Name:       body.Name,
-		IsPublic:   body.IsPublic,
-		CustomTags: body.CustomTags,
-		Items:      toModelItems(body.Items),
-		Body:       toModelBody(body.Body),
+		UserID:           body.UserID,
+		TemplateID:       body.TemplateID.String(),
+		Name:             body.Name,
+		IsPublic:         body.IsPublic,
+		CustomTags:       body.CustomTags,
+		Items:            toModelItems(body.Items),
+		Body:             toModelBody(body.Body),
+		ThumbnailAssetID: body.ThumbnailAssetID,
 	})
 	if err != nil {
 		writeError(w, err)

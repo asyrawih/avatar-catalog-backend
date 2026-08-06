@@ -68,6 +68,8 @@ type CreateOutfitInput struct {
 	CustomTags []string
 	Items      []model.OutfitItem
 	Body       *model.AvatarBody // opsional
+	// ThumbnailAssetID opsional: asset id thumbnail hasil upload game server.
+	ThumbnailAssetID int64
 }
 
 // UpdateOutfitInput adalah muatan PATCH /v1/outfits/{outfitId}; field nil
@@ -226,19 +228,24 @@ func (s *Outfits) Create(ctx context.Context, in CreateOutfitInput) (model.Outfi
 		return model.Outfit{}, err
 	}
 
+	if in.ThumbnailAssetID < 0 {
+		return model.Outfit{}, apierr.Unprocessable("invalid_thumbnail_asset_id", "thumbnailAssetId tidak boleh negatif")
+	}
+
 	now := s.now()
 	outfit := model.Outfit{
-		OutfitID:    s.newID(),
-		ReferenceID: s.newRefID(),
-		UserID:      in.UserID,
-		TemplateID:  strings.TrimSpace(in.TemplateID),
-		Name:        strings.TrimSpace(in.Name),
-		IsPublic:    in.IsPublic,
-		CustomTags:  in.CustomTags,
-		Items:       in.Items,
-		Body:        body,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		OutfitID:         s.newID(),
+		ReferenceID:      s.newRefID(),
+		UserID:           in.UserID,
+		TemplateID:       strings.TrimSpace(in.TemplateID),
+		Name:             strings.TrimSpace(in.Name),
+		IsPublic:         in.IsPublic,
+		CustomTags:       in.CustomTags,
+		Items:            in.Items,
+		Body:             body,
+		ThumbnailAssetID: in.ThumbnailAssetID,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	if outfit.CustomTags == nil {
 		outfit.CustomTags = []string{}
@@ -531,6 +538,19 @@ func (s *Outfits) validateItems(items []model.OutfitItem) error {
 		}
 		if item.Price < 0 {
 			return apierr.Unprocessable("invalid_item_price", "price item tidak boleh negatif")
+		}
+
+		// bundleId hanya divalidasi bentuknya; apakah bundle-nya benar ada di
+		// Roblox mengikuti aturan yang sama dengan assetId — klien yang tahu.
+		if item.BundleID < 0 {
+			return apierr.Unprocessable("invalid_bundle_id", "bundleId tidak boleh negatif")
+		}
+		if item.BundleID == 0 && strings.TrimSpace(item.BundleName) != "" {
+			return apierr.Unprocessable("invalid_bundle_name", "bundleName butuh bundleId")
+		}
+		if len(strings.TrimSpace(item.BundleName)) > MaxItemNameLen {
+			return apierr.Unprocessable("invalid_bundle_name",
+				fmt.Sprintf("bundleName maksimum %d karakter", MaxItemNameLen))
 		}
 	}
 	return nil

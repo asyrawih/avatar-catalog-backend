@@ -51,9 +51,12 @@ type Outfit struct {
 	CustomTags  []string
 	Items       []OutfitItem
 	Body        *AvatarBody // nil = klien tidak melaporkannya
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DeletedAt   *time.Time // soft delete: baris tidak pernah dihapus
+	// ThumbnailAssetID adalah asset id thumbnail outfit hasil upload game
+	// server; 0 berarti klien tidak melaporkannya.
+	ThumbnailAssetID int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	DeletedAt        *time.Time // soft delete: baris tidak pernah dihapus
 }
 
 // Deleted melaporkan apakah outfit sudah di-soft-delete.
@@ -107,6 +110,12 @@ type OutfitItem struct {
 	Name      string
 	AssetType string
 	Price     int
+	// BundleID != 0 menandai item sebagai bagian sebuah paket (bundle) Roblox.
+	// Price pada bagian paket adalah HARGA BUNDLE INDUK yang terulang di tiap
+	// bagiannya — 6 body part dari paket yang sama membawa harga yang sama 6x —
+	// jadi penjumlah harga wajib menghitung tiap BundleID sekali saja.
+	BundleID   int64
+	BundleName string
 }
 
 // Transaction adalah catatan pembelian dari game server (tabel TRANSACTION).
@@ -125,19 +134,38 @@ type Transaction struct {
 
 // RobuxTotal menjumlahkan harga item yang benar-benar berhasil dibeli.
 // Item aborted/failed tidak dihitung karena Robux-nya tidak berpindah.
+//
+// Bagian paket membawa harga bundle induk yang terulang di tiap bagiannya,
+// jadi tiap BundleID hanya dihitung sekali — kalau tidak, satu paket 6 body
+// part akan tercatat 6x lipat dan cashback ikut membengkak.
 func (t Transaction) RobuxTotal() int {
 	var total int
+	var countedBundles map[int64]bool
 	for _, item := range t.Items {
-		if item.Result == ResultSuccess {
-			total += item.Price
+		if item.Result != ResultSuccess {
+			continue
 		}
+		if item.BundleID != 0 {
+			if countedBundles[item.BundleID] {
+				continue
+			}
+			if countedBundles == nil {
+				countedBundles = make(map[int64]bool)
+			}
+			countedBundles[item.BundleID] = true
+		}
+		total += item.Price
 	}
 	return total
 }
 
 // TransactionItem adalah satu baris item dalam transaksi (tabel TRANSACTION_ITEM).
+//
+// BundleID mengikuti semantik OutfitItem.BundleID: bukan nol berarti bagian
+// paket, dan Price-nya adalah harga bundle induk yang terulang per bagian.
 type TransactionItem struct {
-	AssetID int64
-	Price   int
-	Result  TxResult
+	AssetID  int64
+	Price    int
+	Result   TxResult
+	BundleID int64
 }

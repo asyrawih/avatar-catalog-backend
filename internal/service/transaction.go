@@ -88,6 +88,10 @@ func (s *Transactions) Create(ctx context.Context, in CreateTransactionInput) (m
 			return model.Transaction{}, false, apierr.Unprocessable("invalid_price", "Harga tidak boleh negatif").
 				WithDetails(map[string]any{"field": indexedField("items", i, "price")})
 		}
+		if item.BundleID < 0 {
+			return model.Transaction{}, false, apierr.Unprocessable("invalid_bundle_id", "bundleId tidak boleh negatif").
+				WithDetails(map[string]any{"field": indexedField("items", i, "bundleId")})
+		}
 		if err := validateItemResult(item.Result, i); err != nil {
 			return model.Transaction{}, false, err
 		}

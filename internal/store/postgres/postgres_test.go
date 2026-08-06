@@ -563,3 +563,58 @@ func TestOutfitSearchTrigramDanEmbedding(t *testing.T) {
 		t.Errorf("SetNameEmbedding(tak dikenal) error = %v, ingin ErrNotFound", err)
 	}
 }
+
+// TestSpendStatsMenghitungBundleSekali menguji SQL spend yang men-dedup harga
+// bundle: bagian paket membawa harga bundle induk berulang, dan LifetimeSpend
+// hanya boleh menghitungnya sekali per (transaksi, bundle).
+func TestSpendStatsMenghitungBundleSekali(t *testing.T) {
+	pool := newPool(t)
+	transactions := postgres.NewTransactions(pool)
+	cashback := postgres.NewCashback(pool)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	tx := model.Transaction{
+		TxID:           "tx_bundle01",
+		UserID:         627278822,
+		IdempotencyKey: "kunci-bundle-01",
+		Status:         "success",
+		OccurredAt:     now,
+		ReceivedAt:     now,
+		Items: []model.TransactionItem{
+			{AssetID: 121390054271388, Price: 55, Result: model.ResultSuccess},
+			{AssetID: 429786881, Price: 445, Result: model.ResultSuccess, BundleID: 429785907},
+			{AssetID: 429786958, Price: 445, Result: model.ResultSuccess, BundleID: 429785907},
+			{AssetID: 429787041, Price: 445, Result: model.ResultSuccess, BundleID: 429785907},
+			{AssetID: 619528412, Price: 250, Result: model.ResultSuccess, BundleID: 928374650},
+			{AssetID: 619528641, Price: 250, Result: model.ResultSuccess, BundleID: 928374650},
+			{AssetID: 999, Price: 400, Result: model.ResultFailed, BundleID: 555},
+		},
+	}
+	if err := transactions.Create(ctx, tx); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	stats, err := cashback.SpendStats(ctx, tx.UserID, "", now.AddDate(0, 0, -3))
+	if err != nil {
+		t.Fatalf("SpendStats() error = %v", err)
+	}
+	if want := 55 + 445 + 250; stats.LifetimeSpend != want {
+		t.Errorf("LifetimeSpend = %d, ingin %d (bundle dihitung sekali)", stats.LifetimeSpend, want)
+	}
+	if stats.PurchaseCount != 1 {
+		t.Errorf("PurchaseCount = %d, ingin 1", stats.PurchaseCount)
+	}
+
+	// Item transaksi terbaca kembali lengkap dengan bundleId-nya.
+	rows, _, err := transactions.ListByUser(ctx, tx.UserID, nil, 10)
+	if err != nil {
+		t.Fatalf("ListByUser() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByUser() = %d transaksi, ingin 1", len(rows))
+	}
+	if got := rows[0].RobuxTotal(); got != 55+445+250 {
+		t.Errorf("RobuxTotal() dari baris tersimpan = %d, ingin %d", got, 55+445+250)
+	}
+}

@@ -50,8 +50,9 @@ func (s *Transactions) Create(ctx context.Context, tx model.Transaction) error {
 		batch := &pgx.Batch{}
 		for _, item := range tx.Items {
 			batch.Queue(`
-				INSERT INTO transaction_item (tx_id, asset_id, price, result)
-				VALUES ($1, $2, $3, $4)`, tx.TxID, item.AssetID, item.Price, item.Result)
+				INSERT INTO transaction_item (tx_id, asset_id, price, result, bundle_id)
+				VALUES ($1, $2, $3, $4, $5)`,
+				tx.TxID, item.AssetID, item.Price, item.Result, nullableInt64(item.BundleID))
 		}
 
 		results := dbTx.SendBatch(ctx, batch)
@@ -139,7 +140,7 @@ func (s *Transactions) attachItems(ctx context.Context, transactions []*model.Tr
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT tx_id, asset_id, price, result
+		SELECT tx_id, asset_id, price, result, coalesce(bundle_id, 0)
 		FROM transaction_item
 		WHERE tx_id = ANY($1)
 		ORDER BY tx_id, asset_id`, ids)
@@ -154,7 +155,7 @@ func (s *Transactions) attachItems(ctx context.Context, transactions []*model.Tr
 			txID string
 			item model.TransactionItem
 		)
-		if err := rows.Scan(&txID, &item.AssetID, &item.Price, &item.Result); err != nil {
+		if err := rows.Scan(&txID, &item.AssetID, &item.Price, &item.Result, &item.BundleID); err != nil {
 			return err
 		}
 		byTx[txID] = append(byTx[txID], item)

@@ -28,7 +28,8 @@ var _ store.Outfits = (*Outfits)(nil)
 
 const outfitColumns = `
 	o.outfit_id, o.reference_id::text, o.reco_item_id, o.user_id, o.template_id,
-	o.name, o.is_public, o.custom_tags, o.body, o.created_at, o.updated_at, o.deleted_at`
+	o.name, o.is_public, o.custom_tags, o.body, coalesce(o.thumbnail_asset_id, 0),
+	o.created_at, o.updated_at, o.deleted_at`
 
 // Create menyimpan outfit beserta itemnya dalam satu transaksi.
 func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
@@ -44,10 +45,12 @@ func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO outfit (outfit_id, reference_id, reco_item_id, user_id, template_id,
-			                    name, is_public, custom_tags, body, created_at, updated_at, deleted_at)
-			VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)`,
+			                    name, is_public, custom_tags, body, thumbnail_asset_id,
+			                    created_at, updated_at, deleted_at)
+			VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)`,
 			o.OutfitID, o.ReferenceID, o.RecoItemID, o.UserID, o.TemplateID,
-			o.Name, o.IsPublic, tagsOrEmpty(o.CustomTags), body, o.CreatedAt, o.UpdatedAt, o.DeletedAt)
+			o.Name, o.IsPublic, tagsOrEmpty(o.CustomTags), body, nullableInt64(o.ThumbnailAssetID),
+			o.CreatedAt, o.UpdatedAt, o.DeletedAt)
 		if err != nil {
 			return err
 		}
@@ -297,10 +300,12 @@ func (s *Outfits) Update(ctx context.Context, outfitID string, fn func(*model.Ou
 		_, err = tx.Exec(ctx, `
 			UPDATE outfit
 			SET reco_item_id = $2, template_id = $3, name = $4, is_public = $5,
-			    custom_tags = $6, body = $7::jsonb, updated_at = $8, deleted_at = $9
+			    custom_tags = $6, body = $7::jsonb, thumbnail_asset_id = $8,
+			    updated_at = $9, deleted_at = $10
 			WHERE outfit_id = $1`,
 			outfitID, draft.RecoItemID, draft.TemplateID, draft.Name, draft.IsPublic,
-			tagsOrEmpty(draft.CustomTags), body, draft.UpdatedAt, draft.DeletedAt)
+			tagsOrEmpty(draft.CustomTags), body, nullableInt64(draft.ThumbnailAssetID),
+			draft.UpdatedAt, draft.DeletedAt)
 		if err != nil {
 			return err
 		}
@@ -362,7 +367,8 @@ func itemsForTx(ctx context.Context, tx pgx.Tx, outfitIDs []string) (map[string]
 }
 
 const outfitItemsQuery = `
-	SELECT outfit_id, asset_id, slot, name, asset_type, price
+	SELECT outfit_id, asset_id, slot, name, asset_type, price,
+	       coalesce(bundle_id, 0), bundle_name
 	FROM outfit_item
 	WHERE outfit_id = ANY($1)
 	ORDER BY outfit_id, slot`
@@ -377,7 +383,8 @@ func collectOutfitItems(rows pgx.Rows) (map[string][]model.OutfitItem, error) {
 			item     model.OutfitItem
 		)
 		if err := rows.Scan(&outfitID, &item.AssetID, &item.Slot,
-			&item.Name, &item.AssetType, &item.Price); err != nil {
+			&item.Name, &item.AssetType, &item.Price,
+			&item.BundleID, &item.BundleName); err != nil {
 			return nil, err
 		}
 		out[outfitID] = append(out[outfitID], item)
@@ -393,9 +400,11 @@ func insertOutfitItems(ctx context.Context, tx pgx.Tx, outfitID string, items []
 	batch := &pgx.Batch{}
 	for _, item := range items {
 		batch.Queue(`
-			INSERT INTO outfit_item (outfit_id, asset_id, slot, name, asset_type, price)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			outfitID, item.AssetID, item.Slot, item.Name, item.AssetType, item.Price)
+			INSERT INTO outfit_item (outfit_id, asset_id, slot, name, asset_type, price,
+			                         bundle_id, bundle_name)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			outfitID, item.AssetID, item.Slot, item.Name, item.AssetType, item.Price,
+			nullableInt64(item.BundleID), item.BundleName)
 	}
 
 	results := tx.SendBatch(ctx, batch)
@@ -421,7 +430,8 @@ func scanOutfit(row scanner) (model.Outfit, error) {
 		body []byte
 	)
 	err := row.Scan(&o.OutfitID, &o.ReferenceID, &o.RecoItemID, &o.UserID, &o.TemplateID,
-		&o.Name, &o.IsPublic, &o.CustomTags, &body, &o.CreatedAt, &o.UpdatedAt, &o.DeletedAt)
+		&o.Name, &o.IsPublic, &o.CustomTags, &body, &o.ThumbnailAssetID,
+		&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt)
 	if err != nil {
 		return model.Outfit{}, err
 	}
