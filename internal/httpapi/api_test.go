@@ -39,9 +39,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 	transactions := store.NewMemoryTransactions()
 	store.SeedData(templates, outfits)
 
+	cashback := service.NewCashback(store.NewMemoryCashback(transactions))
 	handler := httpapi.NewRouter(httpapi.Deps{
 		Outfits:      service.NewOutfits(outfits, templates),
-		Transactions: service.NewTransactions(transactions),
+		Transactions: service.NewTransactions(transactions, cashback),
+		Cashback:     cashback,
 		Templates:    service.NewTemplates(templates),
 		Idempotency:  idempotency.NewMemoryStore(time.Hour),
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),

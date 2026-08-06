@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hanan/avatar-catalog-backend/internal/apierr"
 )
@@ -112,6 +113,20 @@ func queryBool(r *http.Request, key string) (*bool, error) {
 		return nil, apierr.BadRequest("invalid_query", "Parameter "+key+" harus true atau false")
 	}
 	return &parsed, nil
+}
+
+// queryTime membaca parameter query bertipe waktu RFC 3339; kosong berarti
+// zero time — pemanggil yang menentukan nilai default-nya.
+func queryTime(r *http.Request, key string) (time.Time, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, apierr.BadRequest("invalid_query", "Parameter "+key+" harus berupa waktu RFC 3339")
+	}
+	return t, nil
 }
 
 // queryList membaca parameter query yang boleh diulang maupun dipisah koma,

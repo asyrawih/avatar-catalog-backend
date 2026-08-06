@@ -35,14 +35,17 @@ type TransactionPage struct {
 // Transactions mencatat pembelian yang dilaporkan game server.
 type Transactions struct {
 	transactions store.Transactions
+	cashback     *Cashback // nil = cashback nonaktif
 	now          func() time.Time
 	newID        func() string
 }
 
-// NewTransactions merangkai service transaksi.
-func NewTransactions(transactions store.Transactions) *Transactions {
+// NewTransactions merangkai service transaksi. cashback boleh nil bila fitur
+// cashback tidak dipasang.
+func NewTransactions(transactions store.Transactions, cashback *Cashback) *Transactions {
 	return &Transactions{
 		transactions: transactions,
+		cashback:     cashback,
 		now:          func() time.Time { return time.Now().UTC() },
 		newID:        newTxID,
 	}
@@ -59,6 +62,11 @@ func (s *Transactions) Create(ctx context.Context, in CreateTransactionInput) (m
 		return model.Transaction{}, false, apierr.BadRequest("missing_idempotency_key", "Header Idempotency-Key wajib untuk endpoint ini")
 	}
 	if existing, ok := s.transactions.ByIdempotencyKey(ctx, key); ok {
+		// Retry setelah transaksi tersimpan tapi accrual sempat gagal: jalur
+		// replay ikut memastikan cashback tercatat. Accrue idempoten per txId.
+		if err := s.accrueCashback(ctx, existing); err != nil {
+			return model.Transaction{}, false, err
+		}
 		return existing, true, nil
 	}
 
@@ -112,7 +120,20 @@ func (s *Transactions) Create(ctx context.Context, in CreateTransactionInput) (m
 		}
 		return model.Transaction{}, false, err
 	}
+	if err := s.accrueCashback(ctx, tx); err != nil {
+		// Transaksi sudah tersimpan; error di sini membuat klien retry, dan
+		// jalur replay di atas yang menuntaskan accrual yang tertinggal.
+		return model.Transaction{}, false, err
+	}
 	return tx, false, nil
+}
+
+// accrueCashback meneruskan transaksi ke service cashback bila fitur dipasang.
+func (s *Transactions) accrueCashback(ctx context.Context, tx model.Transaction) error {
+	if s.cashback == nil {
+		return nil
+	}
+	return s.cashback.Accrue(ctx, tx)
 }
 
 // List mengembalikan riwayat transaksi pemain, terbaru dulu.

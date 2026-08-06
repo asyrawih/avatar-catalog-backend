@@ -12,7 +12,7 @@ import (
 )
 
 func newTxService() *service.Transactions {
-	return service.NewTransactions(store.NewMemoryTransactions())
+	return service.NewTransactions(store.NewMemoryTransactions(), nil)
 }
 
 func validTxInput(key string) service.CreateTransactionInput {

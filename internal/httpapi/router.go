@@ -23,6 +23,7 @@ import (
 type Deps struct {
 	Outfits      *service.Outfits
 	Transactions *service.Transactions
+	Cashback     *service.Cashback
 	Templates    *service.Templates
 	Idempotency  idempotency.Store
 	Auth         Authenticator
@@ -76,6 +77,23 @@ func NewRouter(deps Deps) http.Handler {
 	// endpoint ini tidak dibungkus middleware idempotent.
 	mux.HandleFunc("POST /v1/transactions", transactions.create)
 	mux.HandleFunc("GET /v1/transactions", transactions.list)
+
+	// Cashback. Accrual terjadi otomatis di POST /v1/transactions; endpoint di
+	// sini melayani tampilan klien (summary), redeem, dan operasi tim internal
+	// (resolusi redeem, reversal, jadwal event, rekonsiliasi). Idempotensi
+	// redeem/reversal ditegakkan batasan unik di database, bukan middleware.
+	if deps.Cashback != nil {
+		cashback := &cashbackHandler{cashback: deps.Cashback}
+		mux.HandleFunc("GET /v1/cashback/summary", cashback.summary)
+		mux.HandleFunc("GET /v1/cashback/entries", cashback.listEntries)
+		mux.HandleFunc("POST /v1/cashback/redeems", cashback.createRedeem)
+		mux.HandleFunc("GET /v1/cashback/redeems", cashback.listRedeems)
+		mux.HandleFunc("PATCH /v1/cashback/redeems/{requestId}", cashback.resolveRedeem)
+		mux.HandleFunc("POST /v1/cashback/reversals", cashback.createReversal)
+		mux.HandleFunc("GET /v1/cashback/events", cashback.listEvents)
+		mux.HandleFunc("POST /v1/cashback/events", cashback.createEvent)
+		mux.HandleFunc("GET /v1/cashback/reconciliation", cashback.reconciliation)
+	}
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, apierr.NotFound("route_not_found", "Rute tidak ditemukan"))

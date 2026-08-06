@@ -46,9 +46,11 @@ func run() error {
 	}
 	defer backend.close()
 
+	cashback := service.NewCashback(backend.cashback)
 	deps := httpapi.Deps{
 		Outfits:      service.NewOutfits(backend.outfits, backend.templates),
-		Transactions: service.NewTransactions(backend.transactions),
+		Transactions: service.NewTransactions(backend.transactions, cashback),
+		Cashback:     cashback,
 		Templates:    service.NewTemplates(backend.templates),
 		Idempotency:  backend.idempotency,
 		Auth:         newAuthenticator(cfg, logger),
@@ -97,6 +99,7 @@ func run() error {
 type backend struct {
 	outfits      store.Outfits
 	transactions store.Transactions
+	cashback     store.Cashback
 	templates    store.Templates
 	idempotency  idempotency.Store
 	readiness    map[string]func(context.Context) error
@@ -147,6 +150,7 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 		b.outfits = postgres.NewOutfits(pool)
 		b.transactions = postgres.NewTransactions(pool)
+		b.cashback = postgres.NewCashback(pool)
 		b.templates = postgres.NewTemplates(pool)
 		b.readiness["postgres"] = pool.Ping
 		b.closers = append(b.closers, pool.Close)
@@ -158,8 +162,10 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 			store.SeedData(templateStore, outfitStore)
 		}
 
+		txStore := store.NewMemoryTransactions()
 		b.outfits = outfitStore
-		b.transactions = store.NewMemoryTransactions()
+		b.transactions = txStore
+		b.cashback = store.NewMemoryCashback(txStore)
 		b.templates = templateStore
 		logger.Warn("penyimpanan in-memory aktif", "catatan", "data hilang saat proses berhenti; isi DATABASE_URL untuk memakai postgres")
 	}

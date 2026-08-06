@@ -88,10 +88,12 @@ dan override juga menutup port `8080` ke host.
 
 ### Skema
 
-[db/init/001_schema.sql](db/init/001_schema.sql) berisi 13 tabel ERD v3, dan
+[db/init/001_schema.sql](db/init/001_schema.sql) berisi 13 tabel ERD v3,
 [db/init/002_seed.sql](db/init/002_seed.sql) mengisi data contoh yang sama
-dengan mock Postman. Keduanya dijalankan Postgres **hanya saat volume masih
-kosong**, jadi setelah mengubah skema jalankan:
+dengan mock Postman, dan [db/init/003_cashback.sql](db/init/003_cashback.sql)
+menambah tabel cashback (`cashback_entry`, `redeem_request`, `cashback_event`).
+Semuanya dijalankan Postgres **hanya saat volume masih kosong**, jadi setelah
+mengubah skema jalankan:
 
 ```bash
 docker compose down -v && docker compose up -d db
@@ -162,9 +164,47 @@ Redis dikosongkan.
 | GET | `/v1/catalog/sections/{sectionId}/items` | Isi etalase, hanya item `active` |
 | POST | `/v1/catalog/items:batch-get` | Ambil banyak item katalog sekaligus |
 | POST | `/v1/catalog/sync-runs` | Laporan sync worker |
-| POST | `/v1/transactions` | Catat transaksi (wajib `Idempotency-Key`) |
+| POST | `/v1/transactions` | Catat transaksi (wajib `Idempotency-Key`); cashback ter-accrue otomatis |
 | GET | `/v1/transactions?userId=&limit=&cursor=` | Riwayat transaksi pemain |
+| GET | `/v1/cashback/summary?userId=` | Saldo, rate berjalan + progres bonus, request pending |
+| GET | `/v1/cashback/entries?userId=&limit=&cursor=` | Ledger cashback pemain, terbaru dulu |
+| POST | `/v1/cashback/redeems` | Buat request redeem seluruh saldo (min 100, satu pending per pemain) |
+| GET | `/v1/cashback/redeems?userId=&status=&limit=&cursor=` | Daftar request; tanpa `userId` = antrean internal |
+| PATCH | `/v1/cashback/redeems/{requestId}` | Tuntaskan request: `completed` / `rejected` (mengembalikan saldo) |
+| POST | `/v1/cashback/reversals` | Tarik kembali cashback transaksi yang di-refund (`{"txId": ...}`) |
+| GET / POST | `/v1/cashback/events` | Lihat / jadwalkan jendela bonus event |
+| GET | `/v1/cashback/reconciliation?from=&to=` | Agregat ledger (Robux) untuk rekonsiliasi periodik |
 | GET | `/healthz`, `/readyz` | Probe kesehatan |
+
+## Cashback
+
+Cashback dihitung **di backend, bukan di game** — game hanya menampilkan angka
+dari `GET /v1/cashback/summary`. Semua nilai dalam Robux; tidak ada mata uang
+lain di mana pun dalam sistem ini.
+
+Rate efektif = `min(20% + bonus aktif, 40%)`, cashback per transaksi =
+`floor(spend × rate)` dengan `spend` = jumlah harga item `result='success'`
+pada transaksi itu. Jalur bonus:
+
+| Bonus | Nilai | Syarat (dihitung dari `transaction` + `transaction_item`) |
+| --- | --- | --- |
+| `event` | +10% | Ada jendela `cashback_event` yang mencakup `occurredAt` |
+| `streak` | +5% | Ada spend sukses pada 2 hari (UTC) tepat sebelum hari transaksi |
+| `first` | +10% | Belum pernah ada transaksi dengan spend sukses sebelumnya |
+| `loyal` | +5% | Total spend sukses kumulatif sebelumnya ≥ 5.000 R$ |
+
+Hasil hitung disimpan di ledger **append-only** `cashback_entry` (saldo =
+`SUM(amount)`), supaya rate yang berlaku saat transaksi terjadi tidak berubah
+saat jadwal event bergeser. Accrual menempel pada `POST /v1/transactions` dan
+idempoten lewat batasan unik `(tx_id, kind)` — retry tidak menggandakan
+cashback, dan jalur replay ikut menuntaskan accrual yang sempat gagal.
+
+Redeem memotong **seluruh saldo** saat request dibuat (minimum 100 R$, maksimal
+satu `pending` per pemain — ditegakkan indeks unik parsial). Fulfillment
+dikerjakan tim internal di luar sistem ini; hasilnya masuk lewat
+`PATCH /v1/cashback/redeems/{requestId}` (`rejected` mengembalikan potongan).
+Refund/chargeback ditarik lewat `POST /v1/cashback/reversals`; saldo boleh
+minus — itu disengaja.
 
 ## Rig (templateId)
 
