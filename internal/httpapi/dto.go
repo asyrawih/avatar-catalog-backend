@@ -45,6 +45,7 @@ type resolveEnvelope struct {
 type outfitSummaryDTO struct {
 	OutfitID    string          `json:"outfitId"`
 	ReferenceID string          `json:"referenceId"`
+	UserID      int64           `json:"userId"`
 	Name        string          `json:"name"`
 	TemplateID  string          `json:"templateId"`
 	IsPublic    bool            `json:"isPublic"`
@@ -58,6 +59,7 @@ func newOutfitSummary(o model.Outfit) outfitSummaryDTO {
 	return outfitSummaryDTO{
 		OutfitID:    o.OutfitID,
 		ReferenceID: o.ReferenceID,
+		UserID:      o.UserID,
 		Name:        o.Name,
 		TemplateID:  o.TemplateID,
 		IsPublic:    o.IsPublic,

@@ -233,10 +233,13 @@ func TestListOutfits(t *testing.T) {
 	}
 
 	first, _ := data[0].(map[string]any)
-	for _, field := range []string{"outfitId", "referenceId", "name", "templateId", "isPublic", "itemCount", "items", "updatedAt"} {
+	for _, field := range []string{"outfitId", "referenceId", "userId", "name", "templateId", "isPublic", "itemCount", "items", "updatedAt"} {
 		if _, ok := first[field]; !ok {
 			t.Errorf("ringkasan outfit tidak punya field %q", field)
 		}
+	}
+	if first["userId"] != float64(627278822) {
+		t.Errorf("userId = %v, ingin 627278822", first["userId"])
 	}
 }
 
@@ -802,8 +805,12 @@ func TestResolveOutfitsBerhalaman(t *testing.T) {
 	if len(data) != 1 {
 		t.Fatalf("data = %v, ingin satu outfit di halaman kedua", second["data"])
 	}
-	if row, _ := data[0].(map[string]any); row["referenceId"] != seedRefID2 {
+	row, _ := data[0].(map[string]any)
+	if row["referenceId"] != seedRefID2 {
 		t.Errorf("referenceId = %v, ingin %s", row["referenceId"], seedRefID2)
+	}
+	if row["userId"] != float64(627278822) {
+		t.Errorf("userId = %v, ingin 627278822 — resolve memakai ringkasan yang sama", row["userId"])
 	}
 	if notFound, _ := second["notFound"].([]any); len(notFound) != 0 {
 		t.Errorf("notFound = %v, ingin kosong", second["notFound"])
