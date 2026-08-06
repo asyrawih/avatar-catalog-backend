@@ -251,7 +251,7 @@ func (s *Cashback) ListRedeems(ctx context.Context, f store.RedeemFilter, after 
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+redeemColumns+`
 		FROM redeem_request
-		WHERE ($1 = 0 OR user_id = $1)
+		WHERE ($1::bigint = 0 OR user_id = $1)
 		  AND ($2 = '' OR status = $2)
 		  AND ($3::timestamptz IS NULL
 		       OR requested_at < $3
