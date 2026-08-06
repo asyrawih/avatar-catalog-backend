@@ -221,7 +221,7 @@ func TestOutfitListPencarianPunyaKunciSendiri(t *testing.T) {
 	}
 }
 
-func TestOutfitListDibatalkanPerPemain(t *testing.T) {
+func TestOutfitListDibatalkanGlobalSaatCreate(t *testing.T) {
 	inner := newBackends(t)
 	c := newFakeCache()
 	svc := cached.NewOutfits(inner, c, time.Minute, discardLogger())
@@ -237,7 +237,7 @@ func TestOutfitListDibatalkanPerPemain(t *testing.T) {
 		t.Fatalf("penyimpanan dipukul %d kali, ingin 1", inner.lists)
 	}
 
-	// Daftar lintas pemain dijaga versi global, bukan versi pemain.
+	// Daftar lintas pemain dilayani cache-nya sendiri.
 	if _, _, err := svc.List(ctx, store.OutfitFilter{}, nil, 20); err != nil {
 		t.Fatalf("List() global error = %v", err)
 	}
@@ -248,7 +248,8 @@ func TestOutfitListDibatalkanPerPemain(t *testing.T) {
 		t.Fatalf("penyimpanan dipukul %d kali, ingin 2 (per pemain + global, masing-masing sekali)", inner.lists)
 	}
 
-	// Membuat outfit untuk pemain lain tidak boleh membuang cache pemain ini.
+	// Create pemain MANA PUN membuang seluruh cache outfit — termasuk daftar
+	// pemain lain dan daftar lintas pemain.
 	if err := svc.Create(ctx, model.Outfit{
 		OutfitID: "otf_lain01", ReferenceID: "11111111-1111-4111-8111-111111111111",
 		UserID: 999, TemplateID: "88484288792766", Name: "Punya Orang Lain",
@@ -259,19 +260,17 @@ func TestOutfitListDibatalkanPerPemain(t *testing.T) {
 	if _, _, err := svc.List(ctx, store.OutfitFilter{UserID: seedUser}, nil, 20); err != nil {
 		t.Fatalf("ListByUser() error = %v", err)
 	}
-	if inner.lists != 2 {
-		t.Errorf("penyimpanan dipukul %d kali, ingin tetap 2 (cache pemain lain ikut terbuang)", inner.lists)
+	if inner.lists != 3 {
+		t.Errorf("penyimpanan dipukul %d kali, ingin 3 (cache pemain ini ikut gugur)", inner.lists)
 	}
-
-	// Sebaliknya, daftar global HARUS gugur karena outfit pemain lain masuk ke sana.
 	if _, _, err := svc.List(ctx, store.OutfitFilter{}, nil, 20); err != nil {
 		t.Fatalf("List() global error = %v", err)
 	}
-	if inner.lists != 3 {
-		t.Errorf("penyimpanan dipukul %d kali, ingin 3 (daftar global harus dibaca ulang)", inner.lists)
+	if inner.lists != 4 {
+		t.Errorf("penyimpanan dipukul %d kali, ingin 4 (daftar global harus dibaca ulang)", inner.lists)
 	}
 
-	// Membuat outfit untuk pemain yang sama harus membuang cachenya.
+	// Create untuk pemain yang sama: daftarnya dibaca ulang dan isinya segar.
 	if err := svc.Create(ctx, model.Outfit{
 		OutfitID: "otf_baru01", ReferenceID: "22222222-2222-4222-8222-222222222222",
 		UserID: seedUser, TemplateID: "88484288792766", Name: "Punya Sendiri",
@@ -284,8 +283,8 @@ func TestOutfitListDibatalkanPerPemain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByUser() error = %v", err)
 	}
-	if inner.lists != 4 {
-		t.Errorf("penyimpanan dipukul %d kali, ingin 4 setelah outfit baru", inner.lists)
+	if inner.lists != 5 {
+		t.Errorf("penyimpanan dipukul %d kali, ingin 5 setelah outfit baru", inner.lists)
 	}
 	if len(rows) != 3 {
 		t.Errorf("jumlah outfit = %d, ingin 3 — daftar basi terbaca", len(rows))

@@ -124,17 +124,19 @@ penerbit, detail outfit, dan daftar outfit per pemain. Tanpa `REDIS_URL` semua
 tetap berjalan, hanya langsung ke database.
 
 Pembatalan cache memakai **versi namespace**, bukan penghapusan per pola:
-setiap penulisan menaikkan satu penghitung (`ver:catalog`, `ver:outfit:user:<id>`)
-sehingga kunci lama tidak mungkin terbaca lagi dan hilang sendiri saat TTL
-habis. Menghapus per pola berarti memindai seluruh keyspace Redis, yang justru
-paling berat persis ketika katalog paling sering berubah.
+setiap penulisan outfit (create/update/delete) menaikkan satu penghitung
+global (`ver:outfit:all`) sehingga **seluruh** cache outfit — detail maupun
+daftar semua pemain — tidak terbaca lagi dan hilang sendiri saat TTL habis.
+Menghapus per pola berarti memindai seluruh keyspace Redis, yang justru paling
+berat persis ketika data paling sering berubah. Kunci idempotensi di Redis
+yang sama tidak tersentuh.
 
 Konsekuensinya:
 
 - `POST /v1/catalog/sync-runs` yang menandai asset mati langsung menggugurkan
   seluruh cache katalog — item mati tidak akan bertahan di etalase sampai TTL
   habis.
-- Perubahan outfit satu pemain hanya menggugurkan daftar milik pemain itu.
+- Perubahan outfit pemain mana pun menggugurkan seluruh cache outfit sekaligus.
 - `POST /v1/outfits/resolve` sengaja tidak di-cache: kombinasi `referenceId`
   dari feed hampir selalu berbeda, jadi entrinya nyaris tak pernah terpakai ulang.
 

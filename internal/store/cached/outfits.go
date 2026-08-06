@@ -16,9 +16,11 @@ import (
 
 // Outfits membungkus store.Outfits dengan cache baca.
 //
-// Detail outfit dibatalkan per baris, sedangkan daftar per pemain dibatalkan
-// lewat versi namespace miliknya sendiri — perubahan pada satu pemain tidak
-// membuang cache pemain lain.
+// Semua entri — detail maupun daftar, milik pemain mana pun — hidup di bawah
+// SATU versi global: setiap penulisan outfit menaikkan versi itu sehingga
+// seluruh cache outfit gugur sekaligus. Kasar, tapi sederhana dan tidak
+// mungkin menyajikan data basi; TTL pendek menjaga entri lama tidak menumpuk.
+// Kunci idempotensi di Redis yang sama tidak tersentuh.
 type Outfits struct {
 	inner  store.Outfits
 	cache  cache.Cache
@@ -39,18 +41,18 @@ func NewOutfits(inner store.Outfits, c cache.Cache, ttl time.Duration, logger *s
 
 var _ store.Outfits = (*Outfits)(nil)
 
-// Create meneruskan penulisan lalu membatalkan daftar milik pemain itu.
+// Create meneruskan penulisan lalu membatalkan seluruh cache outfit.
 func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
 	if err := s.inner.Create(ctx, o); err != nil {
 		return err
 	}
-	s.invalidateUser(ctx, o.UserID)
+	s.invalidateAll(ctx)
 	return nil
 }
 
 // Get mengembalikan outfit, lewat cache bila tersedia.
 func (s *Outfits) Get(ctx context.Context, outfitID string) (model.Outfit, error) {
-	key := outfitKey(outfitID)
+	key := s.versionedKey(ctx, "row", outfitID)
 
 	var cachedOutfit model.Outfit
 	found, err := s.cache.Get(ctx, key, &cachedOutfit)
@@ -75,11 +77,8 @@ type outfitPage struct {
 	HasMore bool           `json:"hasMore"`
 }
 
-// List mengembalikan daftar outfit, lewat cache bila tersedia.
-//
-// Daftar per pemain dibatalkan lewat versi milik pemain itu, sedangkan daftar
-// lintas pemain memakai versi global yang naik pada setiap penulisan — daftar
-// gabungan tidak bisa dijaga oleh versi satu pemain saja.
+// List mengembalikan daftar outfit, lewat cache bila tersedia. Semua varian
+// daftar dijaga versi global yang sama.
 func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.KeysetCursor, limit int) ([]model.Outfit, bool, error) {
 	cursorKey := "first"
 	if after != nil {
@@ -100,7 +99,8 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 		sort.Strings(ids)
 		searchKey = cache.HashString(f.Keyword + "|" + strings.Join(ids, ","))
 	}
-	key := s.listKey(ctx, f.UserID, publicKey, searchKey, cursorKey, strconv.Itoa(limit))
+	key := s.versionedKey(ctx, "list", strconv.FormatInt(f.UserID, 10),
+		publicKey, searchKey, cursorKey, strconv.Itoa(limit))
 
 	var page outfitPage
 	found, err := s.cache.Get(ctx, key, &page)
@@ -128,17 +128,13 @@ func (s *Outfits) ListByReferenceIDs(ctx context.Context, referenceIDs []string)
 	return s.inner.ListByReferenceIDs(ctx, referenceIDs)
 }
 
-// Update meneruskan penulisan lalu membuang cache baris dan daftar terkait.
+// Update meneruskan penulisan lalu membatalkan seluruh cache outfit.
 func (s *Outfits) Update(ctx context.Context, outfitID string, fn func(*model.Outfit) error) (model.Outfit, error) {
 	updated, err := s.inner.Update(ctx, outfitID, fn)
 	if err != nil {
 		return model.Outfit{}, err
 	}
-
-	if err := s.cache.Delete(ctx, outfitKey(outfitID)); err != nil {
-		s.logger.Error("gagal membuang cache outfit", "outfitId", outfitID, "err", err)
-	}
-	s.invalidateUser(ctx, updated.UserID)
+	s.invalidateAll(ctx)
 	return updated, nil
 }
 
@@ -148,35 +144,24 @@ func (s *Outfits) set(ctx context.Context, key string, value any) {
 	}
 }
 
-// listKey merangkai kunci daftar beserta versi namespace yang menjaganya.
-func (s *Outfits) listKey(ctx context.Context, userID int64, parts ...string) string {
-	namespace := listNamespace(userID)
-
-	version, err := s.cache.Version(ctx, namespace)
+// versionedKey merangkai kunci cache di bawah versi global berjalan. Kegagalan
+// membaca versi hanya di-log: kunci jatuh ke v0 dan paling buruk jadi miss.
+func (s *Outfits) versionedKey(ctx context.Context, parts ...string) string {
+	version, err := s.cache.Version(ctx, globalNamespace)
 	if err != nil {
-		s.logger.Warn("gagal membaca versi cache outfit", "userId", userID, "err", err)
+		s.logger.Warn("gagal membaca versi cache outfit", "err", err)
 	}
-	return cache.Key(append([]string{namespace, "v" + strconv.FormatInt(version, 10)}, parts...)...)
+	return cache.Key(append([]string{globalNamespace, "v" + strconv.FormatInt(version, 10)}, parts...)...)
 }
 
-// invalidateUser menaikkan versi pemain yang berubah sekaligus versi global,
-// karena outfit itu juga muncul di daftar lintas pemain.
-func (s *Outfits) invalidateUser(ctx context.Context, userID int64) {
-	for _, namespace := range []string{listNamespace(userID), globalNamespace} {
-		if err := s.cache.BumpVersion(ctx, namespace); err != nil {
-			s.logger.Error("gagal membatalkan cache daftar outfit", "namespace", namespace, "err", err)
-		}
+// invalidateAll menaikkan versi global sehingga seluruh entri outfit — detail
+// maupun daftar semua pemain — tidak terbaca lagi. Entri lama hilang sendiri
+// saat TTL habis; kunci lain di Redis (mis. idempotensi) tidak tersentuh.
+func (s *Outfits) invalidateAll(ctx context.Context) {
+	if err := s.cache.BumpVersion(ctx, globalNamespace); err != nil {
+		s.logger.Error("gagal membatalkan cache outfit", "err", err)
 	}
 }
 
-func outfitKey(outfitID string) string { return cache.Key("outfit", outfitID) }
-
-// globalNamespace menjaga daftar outfit lintas pemain.
+// globalNamespace menaungi seluruh cache outfit.
 const globalNamespace = "outfit:all"
-
-func listNamespace(userID int64) string {
-	if userID == 0 {
-		return globalNamespace
-	}
-	return cache.Key("outfit", "user", strconv.FormatInt(userID, 10))
-}
