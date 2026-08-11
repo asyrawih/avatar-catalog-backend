@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: avatar-catalog
+
+commonLabels:
+  app.kubernetes.io/part-of: avatar-catalog
+
+resources:
+  - namespace.yaml
+  - configmap-app.yaml
+  - secret-app.yaml
+  - postgres.yaml
+  - redis.yaml
+  - api.yaml
+  - ingress.yaml

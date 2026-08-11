@@ -1,0 +1,19 @@
+# Padanan Traefik untuk `encode zstd gzip` di Caddyfile.
+#
+# CRD ini bawaan Traefik di k3s. Kalau k3s-nya lama dan masih Traefik v2,
+# apiVersion-nya `traefik.containo.us/v1alpha1` — cek dengan:
+#   kubectl get crd | grep middlewares
+#
+# Catatan kenapa tidak ada middleware redirect http->https di sini:
+# `redirectScheme` berlaku untuk semua router yang memakainya, termasuk yang
+# sudah melayani HTTPS, sehingga request https ikut diredirect ke https lagi
+# dan jadi loop. Redirect di k3s dipasang di level entrypoint Traefik — lihat
+# docs/deploy-k8s.md bagian "Redirect HTTP ke HTTPS".
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: compress
+  labels:
+    app.kubernetes.io/name: api
+spec:
+  compress: {}

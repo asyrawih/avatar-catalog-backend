@@ -1,0 +1,16 @@
+# Timeout longgar ke backend — padanan blok `transport http` di Caddyfile:
+#   dial_timeout 5s
+#   response_header_timeout 30s
+#
+# Di Traefik ini bukan Middleware melainkan ServersTransport, dan dirujuk dari
+# Service (lihat patch-api-service.yaml), bukan dari Ingress.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: api-timeouts
+  labels:
+    app.kubernetes.io/name: api
+spec:
+  forwardingTimeouts:
+    dialTimeout: 5s
+    responseHeaderTimeout: 30s

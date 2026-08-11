@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: avatar-catalog-config
+data:
+  APP_ENV: "development"
+  LOG_LEVEL: "debug"

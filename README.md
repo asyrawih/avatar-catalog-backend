@@ -86,6 +86,16 @@ Setelah itu `docker compose up -d` polos pun ikut override. Jangan pasang baris
 itu di `.env` lokal: network `EDGE_NETWORK` tidak ada di mesin pengembangan,
 dan override juga menutup port `8080` ke host.
 
+### Kubernetes / k3s
+
+Manifest lengkapnya ada di [k8s/](k8s) dan panduan deploy dari server kosong
+sampai domain aktif ada di
+[docs/deploy-k8s.md](docs/deploy-k8s.md).
+
+```bash
+./k8s/deploy.sh dev     # atau: ./k8s/deploy.sh prod
+```
+
 ### Skema
 
 [db/init/001_schema.sql](db/init/001_schema.sql) berisi 13 tabel ERD v3,

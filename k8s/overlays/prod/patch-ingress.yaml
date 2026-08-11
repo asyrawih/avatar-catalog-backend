@@ -1,0 +1,25 @@
+# Sertifikat otomatis lewat cert-manager (pengganti ACME bawaan Caddy).
+# Hapus dua anotasi + blok tls kalau TLS diterminasi di Cloudflare/LB.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: avatar-catalog-api
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - catalog.kelasmalam.app
+      secretName: avatar-catalog-tls
+  rules:
+    - host: catalog.kelasmalam.app
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: avatar-catalog-api
+                port:
+                  name: http

@@ -1,0 +1,8 @@
+# Satu node, jadi batas atasnya dipatok ke apa yang muat di mesin itu.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: avatar-catalog-api
+spec:
+  minReplicas: 2
+  maxReplicas: 6

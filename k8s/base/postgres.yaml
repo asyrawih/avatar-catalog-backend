@@ -1,0 +1,126 @@
+# pgvector/pgvector = postgres resmi + extension vector; dibutuhkan kolom
+# OUTFIT.name_embedding.
+apiVersion: v1
+kind: Service
+metadata:
+  name: avatar-catalog-db
+  labels:
+    app.kubernetes.io/name: db
+    app.kubernetes.io/part-of: avatar-catalog
+spec:
+  # Headless: StatefulSet butuh identitas stabil, dan api tetap bisa memanggil
+  # nama service ini karena DNS mengembalikan IP pod tunggal.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: db
+    app.kubernetes.io/part-of: avatar-catalog
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: avatar-catalog-db
+  labels:
+    app.kubernetes.io/name: db
+    app.kubernetes.io/part-of: avatar-catalog
+spec:
+  serviceName: avatar-catalog-db
+  # Postgres single-node. Menaikkan angka ini tidak membuat replikasi.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: db
+      app.kubernetes.io/part-of: avatar-catalog
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: db
+        app.kubernetes.io/part-of: avatar-catalog
+    spec:
+      securityContext:
+        # uid/gid postgres di image resmi.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg17
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: avatar-catalog-secret
+                  key: POSTGRES_PASSWORD
+            # Bikin initdb tegas soal encoding dan collation supaya urutan teks
+            # sama di semua cluster.
+            - name: POSTGRES_INITDB_ARGS
+              value: "--encoding=UTF8 --locale=C"
+            # PVC dipasang di /var/lib/postgresql/data dan sering berisi
+            # lost+found; initdb menolak direktori tidak kosong, jadi data
+            # ditaruh di subdirektori.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # Skrip di sini HANYA jalan saat PGDATA masih kosong. Untuk memuat
+            # ulang skema: hapus StatefulSet beserta PVC-nya.
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: init
+          configMap:
+            # Dibuat dari db/init/*.sql — lihat k8s/deploy.sh atau README.
+            name: avatar-catalog-db-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

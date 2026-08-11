@@ -1,0 +1,93 @@
+# Cache boleh hilang kapan saja, jadi tidak ada PVC: persistensi dimatikan dan
+# memori dibatasi — begitu penuh, kunci paling jarang dipakai dibuang sendiri.
+apiVersion: v1
+kind: Service
+metadata:
+  name: avatar-catalog-redis
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: avatar-catalog
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: avatar-catalog
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: avatar-catalog-redis
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: avatar-catalog
+spec:
+  replicas: 1
+  strategy:
+    # Redis di sini single instance tanpa persistensi; rolling update akan
+    # membuat dua pod berebut nama service dan separuh cache jadi tak konsisten.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/part-of: avatar-catalog
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: avatar-catalog
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          imagePullPolicy: IfNotPresent
+          args:
+            - redis-server
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - allkeys-lru
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              # Di atas --maxmemory 256mb supaya overhead alokator tidak kena OOMKill.
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /data
+      volumes:
+        - name: tmp
+          emptyDir: {}

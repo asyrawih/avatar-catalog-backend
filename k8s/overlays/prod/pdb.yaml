@@ -1,0 +1,13 @@
+# Menjaga api tetap melayani saat node di-drain untuk maintenance.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: avatar-catalog-api
+  labels:
+    app.kubernetes.io/name: api
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+      app.kubernetes.io/part-of: avatar-catalog

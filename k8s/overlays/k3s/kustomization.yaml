@@ -1,0 +1,25 @@
+# Overlay untuk k3s: sama dengan prod, tapi ingress-nya Traefik (bawaan k3s)
+# dan ukurannya dipas untuk satu node.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Resource tambahan di overlay ini (HPA, PDB, CRD Traefik) tidak mewarisi
+# namespace dari base — harus disebut lagi di sini.
+namespace: avatar-catalog
+
+resources:
+  - ../prod
+  - traefik-middleware.yaml
+  - traefik-serverstransport.yaml
+
+# Satu node: 3 replika hanya menumpuk di mesin yang sama tanpa menambah
+# ketahanan. Dua sudah cukup supaya rolling update tidak menurunkan kapasitas.
+replicas:
+  - name: avatar-catalog-api
+    count: 2
+
+patches:
+  - path: patch-ingress.yaml
+  - path: patch-api-service.yaml
+  - path: patch-hpa.yaml
+  - path: patch-pdb.yaml

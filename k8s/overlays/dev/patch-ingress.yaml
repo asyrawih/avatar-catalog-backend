@@ -1,0 +1,19 @@
+# Lokal: HTTP saja, tanpa TLS. Kalau ingress controller belum terpasang,
+# lewati saja dan pakai:
+#   kubectl -n avatar-catalog port-forward svc/avatar-catalog-api 8080:8080
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: avatar-catalog-api
+spec:
+  rules:
+    - host: catalog.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: avatar-catalog-api
+                port:
+                  name: http

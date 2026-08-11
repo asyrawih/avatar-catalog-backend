@@ -1,0 +1,7 @@
+# ServersTransport dirujuk dari Service, bukan dari Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: avatar-catalog-api
+  annotations:
+    traefik.ingress.kubernetes.io/service.serverstransport: avatar-catalog-api-timeouts@kubernetescrd

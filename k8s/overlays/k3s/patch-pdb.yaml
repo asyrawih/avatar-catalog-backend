@@ -1,0 +1,8 @@
+# Di cluster satu node, minAvailable: 2 dari overlay prod membuat `kubectl
+# drain` mustahil dan rollout bisa macet. Satu pod cukup.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: avatar-catalog-api
+spec:
+  minAvailable: 1

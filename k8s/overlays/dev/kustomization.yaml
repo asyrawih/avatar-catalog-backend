@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: ghcr.io/hanan/avatar-catalog-backend
+    newTag: dev
+
+# Satu replika saja: cluster lokal (kind/minikube/k3d) biasanya single node dan
+# PVC ReadWriteOnce tidak perlu direbutkan.
+replicas:
+  - name: avatar-catalog-api
+    count: 1
+
+patches:
+  - path: patch-config.yaml
+  - path: patch-ingress.yaml
+  - path: patch-api-resources.yaml

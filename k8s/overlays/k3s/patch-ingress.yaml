@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: avatar-catalog-api
+  annotations:
+    # Anotasi nginx dari base/prod dibuang: Traefik mengabaikannya diam-diam,
+    # jadi kalau dibiarkan manifest ini seolah memasang sesuatu yang tidak ada.
+    nginx.ingress.kubernetes.io/configuration-snippet: null
+    nginx.ingress.kubernetes.io/proxy-read-timeout: null
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: null
+    nginx.ingress.kubernetes.io/ssl-redirect: null
+
+    # Format rujukan middleware: <namespace>-<nama>@kubernetescrd.
+    traefik.ingress.kubernetes.io/router.middlewares: avatar-catalog-compress@kubernetescrd
+
+    # Nama entrypoint bawaan k3s: web (:80) dan websecure (:443). Router ini
+    # hanya melayani yang TLS; redirect dari :80 diatur di level entrypoint
+    # (lihat docs/deploy-k8s.md).
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik

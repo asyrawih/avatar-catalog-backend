@@ -1,0 +1,30 @@
+# Pengganti service caddy di docker compose: TLS dan routing publik ditangani
+# ingress controller cluster. Host dan issuer diatur per-lingkungan di overlay.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: avatar-catalog-api
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: avatar-catalog
+  annotations:
+    # Di belakang Cloudflare, IP asli klien ada di CF-Connecting-IP. Diteruskan
+    # sebagai X-Real-IP supaya log/rate limit tidak melihat IP edge Cloudflare.
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Real-IP $http_cf_connecting_ip;
+    # Beberapa endpoint katalog menulis ke Postgres, jadi timeout dilonggarkan.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "5"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: catalog.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: avatar-catalog-api
+                port:
+                  name: http
