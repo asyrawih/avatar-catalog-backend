@@ -51,7 +51,7 @@ Docker-nya** — jadi image hasil `docker build` langsung terlihat cluster, tanp
 registry sama sekali.
 
 ```bash
-docker build -t ghcr.io/asyrawi/avatar-catalog-backend:dev .
+docker build -t ghcr.io/asyrawih/avatar-catalog-backend:dev .
 ./k8s/deploy.sh orbstack
 ```
 
@@ -211,8 +211,8 @@ yang sama **tidak** otomatis terlihat.
 **Lewat registry (disarankan):**
 
 ```bash
-docker build -t ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0 .
-docker push ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0
+docker build -t ghcr.io/asyrawih/avatar-catalog-backend:v0.1.0 .
+docker push ghcr.io/asyrawih/avatar-catalog-backend:v0.1.0
 ```
 
 Registry privat butuh pull secret:
@@ -220,7 +220,7 @@ Registry privat butuh pull secret:
 ```bash
 kubectl -n avatar-catalog create secret docker-registry ghcr \
   --docker-server=ghcr.io \
-  --docker-username=asyrawi \
+  --docker-username=asyrawih \
   --docker-password='<PAT dengan scope read:packages>'
 
 kubectl -n avatar-catalog patch serviceaccount default \
@@ -230,7 +230,7 @@ kubectl -n avatar-catalog patch serviceaccount default \
 **Tanpa registry**, impor langsung ke containerd:
 
 ```bash
-docker save ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0 | sudo k3s ctr images import -
+docker save ghcr.io/asyrawih/avatar-catalog-backend:v0.1.0 | sudo k3s ctr images import -
 ```
 
 Kalau pakai cara ini, set `imagePullPolicy: IfNotPresent` (sudah default di
@@ -411,8 +411,8 @@ curl -s $HOST/readyz | jq
 ### Rilis versi baru
 
 ```bash
-docker build -t ghcr.io/asyrawi/avatar-catalog-backend:v0.2.0 .
-docker push ghcr.io/asyrawi/avatar-catalog-backend:v0.2.0
+docker build -t ghcr.io/asyrawih/avatar-catalog-backend:v0.2.0 .
+docker push ghcr.io/asyrawih/avatar-catalog-backend:v0.2.0
 
 # di server
 # tag image dipegang overlay prod; overlay k3s mewarisinya

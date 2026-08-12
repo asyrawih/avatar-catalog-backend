@@ -61,11 +61,11 @@ curl localhost:8080/readyz   # 200 = Postgres & Redis tersambung
 ## Yang perlu diganti sebelum produksi
 
 1. **Image.** `images.newTag` di `overlays/prod/kustomization.yaml` masih
-   `v0.1.0` dan registry-nya `ghcr.io/asyrawi/avatar-catalog-backend`. Build dan
+   `v0.1.0` dan registry-nya `ghcr.io/asyrawih/avatar-catalog-backend`. Build dan
    push dulu:
    ```bash
-   docker build -t ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0 .
-   docker push ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0
+   docker build -t ghcr.io/asyrawih/avatar-catalog-backend:v0.1.0 .
+   docker push ghcr.io/asyrawih/avatar-catalog-backend:v0.1.0
    ```
    Registry privat butuh `imagePullSecrets` di ServiceAccount namespace.
 2. **Host.** `overlays/prod/patch-ingress.yaml` memakai
