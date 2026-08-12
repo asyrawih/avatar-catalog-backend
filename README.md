@@ -94,8 +94,33 @@ sampai domain aktif ada di
 [docs/deploy-k8s.md](docs/deploy-k8s.md).
 
 ```bash
-./k8s/deploy.sh dev     # atau: ./k8s/deploy.sh prod
+./k8s/deploy.sh dev     # atau: ./k8s/deploy.sh prod / k3s
 ```
+
+Urutan operasional lengkap untuk k3s satu node (produksi):
+
+1. Pasang k3s, cek `kubectl get nodes` — [1.1](docs/deploy-k8s.md#11-pasang-k3s)
+2. **Build image dari source terkini** dan push ke registry, lalu isi
+   `images.newTag` di `k8s/overlays/prod/kustomization.yaml` — jangan pakai
+   image lokal lama, lihat peringatan di
+   [1.4](docs/deploy-k8s.md#14-siapkan-image)
+3. Ganti host di `k8s/overlays/prod/patch-ingress.yaml`, pastikan DNS-nya
+   sudah mengarah ke server
+4. Pasang cert-manager, lalu apply
+   [`k8s/overlays/k3s/cluster-issuer.yaml`](k8s/overlays/k3s/cluster-issuer.yaml)
+   (ganti `email` ACME-nya dulu) dan tunggu `READY: True` —
+   [1.6](docs/deploy-k8s.md#16-domain-dan-tls)
+5. `./k8s/deploy.sh k3s` — tunggu semua pod `Running`
+6. Ganti password Postgres **sebelum** pod db pertama kali start —
+   [1.7](docs/deploy-k8s.md#17-secret-produksi)
+7. Terbitkan kunci API dengan `cmd/apikey`; tanpa ini `/v1` selalu `401` —
+   [1.8](docs/deploy-k8s.md#18-kunci-api)
+8. Jalankan smoke test enam butir dari domain publik —
+   [1.9](docs/deploy-k8s.md#19-smoke-test)
+
+Rilis versi baru, migrasi skema, backup Postgres, dan debug ada di
+[Bagian 2 — Operasional](docs/deploy-k8s.md#bagian-2--operasional) di panduan
+yang sama.
 
 ### Skema
 

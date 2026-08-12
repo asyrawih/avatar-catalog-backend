@@ -12,16 +12,17 @@ ke cluster lain (GKE/EKS/DOKS).
 
 ## Checklist
 
-Urutannya penting — nomor 5 dan 6 sering terlewat, dan gejalanya terlihat
+Urutannya penting — nomor 6 dan 7 sering terlewat, dan gejalanya terlihat
 seperti deploy yang gagal padahal bukan.
 
 - [ ] 1. k3s terpasang, `kubectl get nodes` jalan ([1.1](#11-pasang-k3s))
-- [ ] 2. Image sudah di-push ke registry ([1.4](#14-siapkan-image))
+- [ ] 2. Image sudah di-push ke registry, **dibangun dari source terkini** ([1.4](#14-siapkan-image))
 - [ ] 3. Host di `patch-ingress.yaml` diganti, DNS mengarah ke server ([1.6](#16-domain-dan-tls))
-- [ ] 4. `./k8s/deploy.sh k3s` — semua pod Running ([1.5](#15-deploy))
-- [ ] 5. **Password Postgres diganti SEBELUM pod db pertama kali start** ([1.7](#17-secret-produksi))
-- [ ] 6. **Kunci API diterbitkan** — tanpa ini `/v1` menjawab `401` ([1.8](#18-kunci-api))
-- [ ] 7. Smoke test lulus ([1.9](#19-smoke-test))
+- [ ] 4. cert-manager terpasang dan `ClusterIssuer letsencrypt-prod` `READY: True` ([1.6](#16-domain-dan-tls))
+- [ ] 5. `./k8s/deploy.sh k3s` — semua pod Running ([1.5](#15-deploy))
+- [ ] 6. **Password Postgres diganti SEBELUM pod db pertama kali start** ([1.7](#17-secret-produksi))
+- [ ] 7. **Kunci API diterbitkan** — tanpa ini `/v1` menjawab `401` ([1.8](#18-kunci-api))
+- [ ] 8. Smoke test lulus ([1.9](#19-smoke-test))
 
 ## Ringkasan arsitektur
 
@@ -208,6 +209,12 @@ overlay `prod` yang anotasinya sudah nginx.
 k3s memakai containerd, bukan Docker, jadi image hasil `docker build` di server
 yang sama **tidak** otomatis terlihat.
 
+**Selalu `docker build` ulang dari source terkini sebelum deploy** — jangan
+pakai image lokal lama yang kebetulan sudah ada dengan nama yang sama.
+Image basi tidak gagal terlihat: pod tetap `Running` dan `/readyz` tetap `ok`,
+tapi kode yang jalan bisa jadi versi lama (mis. sistem autentikasi berbeda),
+dan itu baru ketahuan lewat smoke test 1.9, bukan lewat status pod.
+
 **Lewat registry (disarankan):**
 
 ```bash
@@ -293,24 +300,19 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/do
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook
 ```
 
-lalu buat ClusterIssuer bernama `letsencrypt-prod`:
+lalu apply `ClusterIssuer` bernama `letsencrypt-prod` — sudah tersedia di
+[`k8s/overlays/k3s/cluster-issuer.yaml`](../k8s/overlays/k3s/cluster-issuer.yaml),
+tinggal ganti `email` kalau bukan `hanan@kelasmalam.app`:
 
-```yaml
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: hanan@kelasmalam.app
-    privateKeySecretRef:
-      name: letsencrypt-prod-account-key
-    solvers:
-      - http01:
-          ingress:
-            ingressClassName: traefik
+```bash
+kubectl apply -f k8s/overlays/k3s/cluster-issuer.yaml
+kubectl get clusterissuer letsencrypt-prod   # READY harus True
 ```
+
+File ini sengaja dipisah dari `kustomization.yaml` overlay `k3s` karena
+scope-nya cluster, bukan namespace `avatar-catalog` — `./k8s/deploy.sh` tidak
+meng-apply-nya, jadi jalankan manual sekali di awal (dan lagi kalau isinya
+berubah).
 
 Ganti juga host `catalogv2.kelasmalam.app` di `patch-ingress.yaml` kalau
 domainnya berbeda.

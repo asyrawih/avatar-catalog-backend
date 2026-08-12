@@ -1,0 +1,17 @@
+# ClusterIssuer Let's Encrypt untuk cert-manager. Dipisah dari kustomization
+# overlay k3s karena scope-nya cluster, bukan namespace avatar-catalog.
+# Apply manual: kubectl apply -f k8s/overlays/k3s/cluster-issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: hanan@kelasmalam.app
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

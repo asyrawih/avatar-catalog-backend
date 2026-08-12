@@ -17,6 +17,7 @@ k8s/
     orbstack/           dev + Service LoadBalancer (OrbStack di macOS)
     prod/               3 replika, HPA, PDB, TLS cert-manager, ingress nginx
     k3s/                prod + ingress Traefik, dipas untuk satu node
+      cluster-issuer.yaml  ClusterIssuer letsencrypt-prod (apply manual, scope cluster)
   deploy.sh             urutan apply yang benar
 ```
 
