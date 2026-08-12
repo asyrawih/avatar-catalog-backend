@@ -1,0 +1,15 @@
+# Overlay untuk OrbStack (Kubernetes bawaannya di macOS).
+#
+# Sama dengan dev, ditambah Service LoadBalancer supaya API bisa dipanggil dari
+# host tanpa port-forward. OrbStack memberi Service LoadBalancer sebuah IP yang
+# langsung bisa dijangkau dari mac — di cluster lokal lain yang tanpa dukungan
+# LoadBalancer, Service itu akan menggantung Pending, karena itu ia ada di sini
+# dan bukan di overlay dev.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: avatar-catalog
+
+resources:
+  - ../dev
+  - service-lb.yaml

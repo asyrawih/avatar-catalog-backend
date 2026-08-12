@@ -1,0 +1,22 @@
+# Service kedua di samping avatar-catalog-api yang ClusterIP.
+#
+# Ditambahkan, bukan mengubah Service yang sudah ada, supaya nama
+# avatar-catalog-api tetap berarti sama di semua lingkungan — komunikasi di
+# dalam cluster tidak ikut berubah hanya karena satu mesin pengembang butuh
+# akses dari host.
+apiVersion: v1
+kind: Service
+metadata:
+  name: avatar-catalog-api-lb
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: avatar-catalog
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: avatar-catalog
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

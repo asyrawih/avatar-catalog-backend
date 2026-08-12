@@ -14,6 +14,7 @@ k8s/
     ingress.yaml        pengganti service caddy
   overlays/
     dev/                1 replika, resource kecil, host .localtest.me
+    orbstack/           dev + Service LoadBalancer (OrbStack di macOS)
     prod/               3 replika, HPA, PDB, TLS cert-manager, ingress nginx
     k3s/                prod + ingress Traefik, dipas untuk satu node
   deploy.sh             urutan apply yang benar
@@ -22,7 +23,8 @@ k8s/
 ## Jalankan
 
 ```bash
-./k8s/deploy.sh dev     # cluster lokal
+./k8s/deploy.sh dev      # cluster lokal
+./k8s/deploy.sh orbstack # OrbStack di macOS (dev + LoadBalancer)
 ./k8s/deploy.sh k3s     # k3s satu node (Traefik)
 ./k8s/deploy.sh prod    # cluster umum (ingress nginx)
 ```

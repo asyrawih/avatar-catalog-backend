@@ -44,6 +44,49 @@ Semua di namespace `avatar-catalog`.
 
 ---
 
+## OrbStack (macOS, pengembangan lokal)
+
+OrbStack membawa Kubernetes sendiri dan **memakai image store yang sama dengan
+Docker-nya** — jadi image hasil `docker build` langsung terlihat cluster, tanpa
+registry sama sekali.
+
+```bash
+docker build -t ghcr.io/hanan/avatar-catalog-backend:dev .
+./k8s/deploy.sh orbstack
+```
+
+Overlay `orbstack` = overlay `dev` ditambah Service LoadBalancer, supaya API
+bisa dipanggil dari mac tanpa `port-forward`:
+
+```bash
+kubectl -n avatar-catalog get svc avatar-catalog-api-lb   # ambil EXTERNAL-IP
+curl http://<EXTERNAL-IP>:8080/readyz
+```
+
+Service LoadBalancer diletakkan di overlay ini, bukan di `dev`, karena di
+cluster lokal tanpa dukungan LoadBalancer ia akan menggantung `Pending`
+selamanya.
+
+Yang perlu diketahui soal OrbStack:
+
+| Kebutuhan | Status |
+|---|---|
+| StorageClass | `local-path`, sudah default — PVC Postgres langsung jalan |
+| LoadBalancer | Didukung; EXTERNAL-IP-nya IP node dan bisa dijangkau dari mac |
+| Ingress controller | **Tidak ada.** Objek Ingress tetap dibuat tapi tidak dilayani — pakai LoadBalancer di atas, atau pasang ingress-nginx sendiri |
+| metrics-server | **Tidak ada.** Overlay `dev`/`orbstack` tidak memakai HPA jadi tidak masalah; overlay `prod`/`k3s` butuh ini |
+
+Menerbitkan kunci API butuh akses ke Postgres, dan database sengaja tidak
+diekspos:
+
+```bash
+kubectl -n avatar-catalog port-forward statefulset/avatar-catalog-db 15432:5432 &
+export DATABASE_URL="postgres://avatar:avatar_dev_password@localhost:15432/avatar_catalog?sslmode=disable"
+go run ./cmd/apikey issue --name lokal --role game-server --env test
+```
+
+Menghapus semuanya: `kubectl delete namespace avatar-catalog`.
+
 ## Bagian 1 — k3s
 
 ### 1.1 Pasang k3s

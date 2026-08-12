@@ -5,3 +5,7 @@ bin/
 .env
 .idea/
 .vscode/
+
+# Environment Postman yang sudah terisi kunci API. Kunci bersifat rahasia dan
+# tidak boleh masuk git; yang di-commit hanya template kosongnya.
+postman/*.local.json

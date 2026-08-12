@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Deploy avatar-catalog ke Kubernetes.
 #
-#   ./k8s/deploy.sh dev     cluster lokal
-#   ./k8s/deploy.sh k3s     k3s satu node, ingress Traefik
-#   ./k8s/deploy.sh prod    cluster umum, ingress nginx
+#   ./k8s/deploy.sh dev       cluster lokal
+#   ./k8s/deploy.sh orbstack  OrbStack di macOS (dev + LoadBalancer)
+#   ./k8s/deploy.sh k3s       k3s satu node, ingress Traefik
+#   ./k8s/deploy.sh prod      cluster umum, ingress nginx
 #
 # ConfigMap skema database dibuat terpisah dari kustomize karena sumbernya
 # ada di db/init — di luar direktori kustomization, dan kustomize menolak
@@ -15,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMESPACE="avatar-catalog"
 
 if [[ ! -d "$ROOT/k8s/overlays/$OVERLAY" ]]; then
-	echo "overlay tidak dikenal: $OVERLAY (pilih: dev, k3s, prod)" >&2
+	echo "overlay tidak dikenal: $OVERLAY (pilih: dev, orbstack, k3s, prod)" >&2
 	exit 1
 fi
 

@@ -58,6 +58,54 @@ spec:
                   matchLabels:
                     app.kubernetes.io/name: api
                     app.kubernetes.io/part-of: avatar-catalog
+      initContainers:
+        # Server gagal cepat kalau Postgres belum bisa dihubungi saat start, lalu
+        # keluar dengan status 1. Tanpa penjaga ini, pod api pada deploy pertama
+        # masuk CrashLoopBackOff sampai database siap — akhirnya jalan sendiri,
+        # tapi jejaknya berupa restart beruntun dan pod Error yang terlihat
+        # persis seperti kerusakan sungguhan.
+        #
+        # compose menyelesaikannya dengan depends_on: service_healthy; di
+        # Kubernetes tidak ada padanannya, jadi penantiannya ditulis di sini.
+        #
+        # Memakai image yang sama dengan StatefulSet db supaya tidak menambah
+        # image yang harus ditarik, dan pg_isready adalah pemeriksaan yang tepat
+        # — bukan sekadar port terbuka, tapi Postgres benar-benar siap menerima
+        # koneksi.
+        - name: tunggu-postgres
+          image: pgvector/pgvector:pg17
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h avatar-catalog-db -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do
+                echo "menunggu postgres siap..."
+                sleep 2
+              done
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_DB
+          securityContext:
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
       containers:
         - name: api
           # Tag diganti per-lingkungan lewat `images:` di overlay.
