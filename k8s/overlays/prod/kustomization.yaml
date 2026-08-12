@@ -11,7 +11,7 @@ resources:
   - pdb.yaml
 
 images:
-  - name: ghcr.io/hanan/avatar-catalog-backend
+  - name: ghcr.io/asyrawi/avatar-catalog-backend
     # Ganti ke digest atau tag rilis; `latest` bikin rollback tidak jelas.
     newTag: v0.1.0
 

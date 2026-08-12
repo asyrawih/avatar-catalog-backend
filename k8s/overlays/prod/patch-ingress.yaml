@@ -10,10 +10,10 @@ metadata:
 spec:
   tls:
     - hosts:
-        - catalog.kelasmalam.app
+        - catalogv2.kelasmalam.app
       secretName: avatar-catalog-tls
   rules:
-    - host: catalog.kelasmalam.app
+    - host: catalogv2.kelasmalam.app
       http:
         paths:
           - path: /

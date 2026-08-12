@@ -109,7 +109,7 @@ spec:
       containers:
         - name: api
           # Tag diganti per-lingkungan lewat `images:` di overlay.
-          image: ghcr.io/hanan/avatar-catalog-backend:latest
+          image: ghcr.io/asyrawi/avatar-catalog-backend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

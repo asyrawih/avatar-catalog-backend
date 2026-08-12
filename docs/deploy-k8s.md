@@ -51,7 +51,7 @@ Docker-nya** — jadi image hasil `docker build` langsung terlihat cluster, tanp
 registry sama sekali.
 
 ```bash
-docker build -t ghcr.io/hanan/avatar-catalog-backend:dev .
+docker build -t ghcr.io/asyrawi/avatar-catalog-backend:dev .
 ./k8s/deploy.sh orbstack
 ```
 
@@ -211,8 +211,8 @@ yang sama **tidak** otomatis terlihat.
 **Lewat registry (disarankan):**
 
 ```bash
-docker build -t ghcr.io/hanan/avatar-catalog-backend:v0.1.0 .
-docker push ghcr.io/hanan/avatar-catalog-backend:v0.1.0
+docker build -t ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0 .
+docker push ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0
 ```
 
 Registry privat butuh pull secret:
@@ -220,7 +220,7 @@ Registry privat butuh pull secret:
 ```bash
 kubectl -n avatar-catalog create secret docker-registry ghcr \
   --docker-server=ghcr.io \
-  --docker-username=hanan \
+  --docker-username=asyrawi \
   --docker-password='<PAT dengan scope read:packages>'
 
 kubectl -n avatar-catalog patch serviceaccount default \
@@ -230,7 +230,7 @@ kubectl -n avatar-catalog patch serviceaccount default \
 **Tanpa registry**, impor langsung ke containerd:
 
 ```bash
-docker save ghcr.io/hanan/avatar-catalog-backend:v0.1.0 | sudo k3s ctr images import -
+docker save ghcr.io/asyrawi/avatar-catalog-backend:v0.1.0 | sudo k3s ctr images import -
 ```
 
 Kalau pakai cara ini, set `imagePullPolicy: IfNotPresent` (sudah default di
@@ -312,7 +312,7 @@ spec:
             ingressClassName: traefik
 ```
 
-Ganti juga host `catalog.kelasmalam.app` di `patch-ingress.yaml` kalau
+Ganti juga host `catalogv2.kelasmalam.app` di `patch-ingress.yaml` kalau
 domainnya berbeda.
 
 Kalau TLS diterminasi di Cloudflare (mode Flexible/Full), lewati cert-manager:
@@ -377,7 +377,7 @@ Enam pemeriksaan ini membuktikan deploy-nya benar-benar hidup, bukan sekadar
 pod-nya Running. Jalankan dari luar cluster memakai domain sungguhan.
 
 ```bash
-HOST=https://catalog.kelasmalam.app
+HOST=https://catalogv2.kelasmalam.app
 KEY=acb_live_...        # kunci role game-server dari langkah 1.8
 
 st() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
@@ -411,8 +411,8 @@ curl -s $HOST/readyz | jq
 ### Rilis versi baru
 
 ```bash
-docker build -t ghcr.io/hanan/avatar-catalog-backend:v0.2.0 .
-docker push ghcr.io/hanan/avatar-catalog-backend:v0.2.0
+docker build -t ghcr.io/asyrawi/avatar-catalog-backend:v0.2.0 .
+docker push ghcr.io/asyrawi/avatar-catalog-backend:v0.2.0
 
 # di server
 # tag image dipegang overlay prod; overlay k3s mewarisinya
