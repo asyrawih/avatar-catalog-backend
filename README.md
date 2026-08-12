@@ -118,6 +118,24 @@ Urutan operasional lengkap untuk k3s satu node (produksi):
 8. Jalankan smoke test enam butir dari domain publik —
    [1.9](docs/deploy-k8s.md#19-smoke-test)
 
+#### Terbitkan kunci API di k3s
+
+`cmd/apikey` butuh akses langsung ke Postgres, sedangkan database sengaja
+tidak diekspos ke luar cluster — port-forward dulu:
+
+```bash
+kubectl -n avatar-catalog port-forward svc/avatar-catalog-db 5432:5432 &
+export DATABASE_URL="postgres://avatar:<password>@localhost:5432/avatar_catalog?sslmode=disable"
+go run ./cmd/apikey issue --name <nama-konsumen> --role game-server --expires 90d
+go run ./cmd/apikey list
+```
+
+Ganti `<password>` dengan isi `POSTGRES_PASSWORD` di Secret
+`avatar-catalog-secret`, dan `<nama-konsumen>` bebas asal unik untuk
+diidentifikasi lewat `apikey list`. Role yang tersedia ada di tabel
+[Autentikasi](#autentikasi). Token utuh (`acb_live_...`) hanya ditampilkan
+sekali saat `issue` — database cuma menyimpan hash-nya.
+
 Rilis versi baru, migrasi skema, backup Postgres, dan debug ada di
 [Bagian 2 — Operasional](docs/deploy-k8s.md#bagian-2--operasional) di panduan
 yang sama.
