@@ -28,6 +28,27 @@ func (c KeysetCursor) After(at time.Time, id string) bool {
 	return at.Before(c.At)
 }
 
+// CountCursor menandai baris terakhir pada daftar yang diurutkan sebuah
+// pencacah menurun (mis. daftar outfit terpopuler), dengan id sebagai pemecah
+// seri.
+//
+// Terpisah dari KeysetCursor karena kuncinya beda jenis: cursor waktu yang
+// dipakai pada urutan populer akan menyaring baris yang salah tanpa error yang
+// kelihatan. Service menolak cursor yang tidak cocok dengan sort-nya.
+type CountCursor struct {
+	Count int    `json:"count"`
+	ID    string `json:"id"`
+}
+
+// After melaporkan apakah baris (count, id) berada setelah posisi cursor pada
+// urutan pencacah menurun.
+func (c CountCursor) After(count int, id string) bool {
+	if count == c.Count {
+		return id > c.ID
+	}
+	return count < c.Count
+}
+
 // PositionCursor menandai posisi absolut pada daftar yang urutannya stabil,
 // mis. isi etalase yang diurutkan kolom position.
 type PositionCursor struct {

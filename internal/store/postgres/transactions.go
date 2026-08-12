@@ -111,7 +111,7 @@ func (s *Transactions) ListByUser(ctx context.Context, userID int64, after *pagi
 		return nil, false, err
 	}
 
-	transactions, err := collectTransactions(rows)
+	transactions, err := collectTransactions(rows, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -196,10 +196,12 @@ func scanTransaction(row scanner) (model.Transaction, error) {
 	return tx, nil
 }
 
-func collectTransactions(rows pgx.Rows) ([]model.Transaction, error) {
+// collectTransactions membaca seluruh baris hasil. capacity adalah batas atas
+// jumlah baris yang sudah diketahui pemanggil — lihat collectOutfits.
+func collectTransactions(rows pgx.Rows, capacity int) ([]model.Transaction, error) {
 	defer rows.Close()
 
-	var out []model.Transaction
+	out := make([]model.Transaction, 0, capacity)
 	for rows.Next() {
 		tx, err := scanTransaction(rows)
 		if err != nil {

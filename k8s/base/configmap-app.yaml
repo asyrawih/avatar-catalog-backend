@@ -1,5 +1,6 @@
 # Setelan non-rahasia untuk api. Nilainya sejajar dengan .env.example; yang
-# rahasia (password Postgres, AUTH_TOKENS) ada di Secret terpisah.
+# rahasia (password Postgres) ada di Secret terpisah, dan kunci API ada di
+# tabel api_key — bukan di sini maupun di Secret.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -25,6 +26,19 @@ data:
   IDEMPOTENCY_TTL: "24h"
   # Harus lebih pendek dari terminationGracePeriodSeconds di Deployment api.
   SHUTDOWN_TIMEOUT: "10s"
+
+  # Setiap request /v1 wajib membawa kunci API yang sah. Kunci-kuncinya ada di
+  # tabel api_key, bukan di sini — diterbitkan dan dicabut dengan cmd/apikey
+  # tanpa perlu redeploy. Jangan diubah jadi "false" di lingkungan mana pun
+  # yang bisa dijangkau dari luar.
+  AUTH_REQUIRED: "true"
+
+  # Batas request per detik PER KUNCI API.
+  #
+  # Dihitung per proses, bukan per cluster: dengan replicas: 2 di base, batas
+  # efektif satu kunci jadi 2 x nilai ini. Bagi dulu kalau yang dimaksud batas
+  # gabungan — atau naikkan sadar-sadar kalau memang per-pod yang diinginkan.
+  RATE_LIMIT_PER_SECOND: "50"
 
   # Nama database dan user Postgres. Password ada di Secret.
   POSTGRES_DB: "avatar_catalog"

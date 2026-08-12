@@ -1,0 +1,1819 @@
+{
+  "info": {
+    "_postman_id": "a7c3f1e2-0b4d-4c8a-9e6f-2d5b8c1a4e70",
+    "name": "avatar-catalog-api",
+    "description": "Backend katalog avatar Roblox.\n\n## Sebelum mulai\n\n1. Import `avatar-catalog-api.postman_environment.json` sebagai environment, atau isi variabel collection di bawah.\n2. Terbitkan kunci API di backend:\n\n```bash\nexport DATABASE_URL=postgres://...\ngo run ./cmd/apikey issue --name postman --role game-server --env test\ngo run ./cmd/apikey issue --name postman-admin --role dashboard --env test\ngo run ./cmd/apikey issue --name postman-ai --role ai --env test\n```\n\n3. Isi `apiKey` (game-server), `adminApiKey` (dashboard), dan `aiApiKey` (ai).\n\nUntuk pengembangan lokal tanpa kunci sama sekali, jalankan server dengan `AUTH_REQUIRED=false` — tapi jangan pernah di lingkungan yang bisa dijangkau dari luar.\n\n## Konvensi\n\n- POST yang membuat baris memakai header `Idempotency-Key` (dibangkitkan otomatis oleh skrip pre-request).\n- PUT/PATCH/DELETE idempoten dari desainnya.\n- Paginasi memakai cursor, bukan offset. Cursor buram; kirim balik apa adanya dari `nextCursor`.\n- Header `X-User-Id` menyatakan panggilan mewakili seorang pemain. Backend hanya menerimanya dari kunci ber-scope `actor:assert`.\n- Semua kegagalan memakai satu amplop: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":[...]}}`.\n\n## Variabel yang terisi otomatis\n\n`outfitId`, `referenceId`, `txId`, `requestId`, dan `cursor` diisi oleh skrip test dari respons sebelumnya, jadi folder bisa dijalankan berurutan dengan Collection Runner.\n\nDibuat dari rute yang benar-benar terdaftar di `internal/httpapi/router.go`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiKey}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Peringatkan sekali kalau kunci belum diisi — gejalanya (401 di",
+          "// semua request) mudah disalahartikan sebagai server yang rusak.",
+          "if (!pm.collectionVariables.get('apiKey') && !pm.environment.get('apiKey')) {",
+          "  console.warn('apiKey belum diisi. Terbitkan dengan: go run ./cmd/apikey issue --name postman --role game-server --env test');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "description": "Tanpa garis miring di akhir"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "description": "Kunci role game-server. acb_test_... atau acb_live_..."
+    },
+    {
+      "key": "adminApiKey",
+      "value": "",
+      "description": "Kunci role dashboard; dipakai endpoint cashback:admin"
+    },
+    {
+      "key": "aiApiKey",
+      "value": "",
+      "description": "Kunci role ai; dipakai contoh penolakan scope"
+    },
+    {
+      "key": "noAuth",
+      "value": "",
+      "description": "Sengaja kosong: dipakai request yang harus jalan TANPA kunci"
+    },
+    {
+      "key": "userId",
+      "value": "627278822",
+      "description": "Pemain contoh dari data seed"
+    },
+    {
+      "key": "templateId",
+      "value": "88484288792766",
+      "description": "Rig contoh dari data seed"
+    },
+    {
+      "key": "outfitId",
+      "value": "otf_9f2a41",
+      "description": "Diisi otomatis oleh Buat outfit / Daftar outfit"
+    },
+    {
+      "key": "referenceId",
+      "value": "550e8400-e29b-41d4-a716-446655440000",
+      "description": "Diisi otomatis oleh Buat outfit"
+    },
+    {
+      "key": "txId",
+      "value": "tx_belum_ada",
+      "description": "Diisi otomatis oleh Catat transaksi. Nilai bawaannya sekadar penampung supaya rute yang memakainya tetap cocok"
+    },
+    {
+      "key": "requestId",
+      "value": "req_belum_ada",
+      "description": "Diisi otomatis oleh Buat request redeem. Nilai bawaannya sekadar penampung supaya rute yang memakainya tetap cocok"
+    },
+    {
+      "key": "cursor",
+      "value": "",
+      "description": "Diisi otomatis oleh Daftar outfit"
+    },
+    {
+      "key": "idempotencyKey",
+      "value": "",
+      "description": "Dibangkitkan skrip pre-request tiap kirim"
+    }
+  ],
+  "item": [
+    {
+      "name": "Kesehatan",
+      "description": "Probe untuk orchestrator. Dua-duanya TANPA kunci API — kubelet dan load balancer tidak memegang kredensial, dan probe yang butuh kunci akan menandai pod sehat jadi tidak sehat begitu kuncinya dirotasi.",
+      "item": [
+        {
+          "name": "Healthz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "description": "Membuktikan proses hidup. Tidak menyentuh Postgres maupun Redis.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{noAuth}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status ok', () => pm.response.json().status === 'ok');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readyz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            },
+            "description": "Ikut memeriksa dependensi. 503 = degraded; field `checks` menunjukkan Postgres atau Redis yang bermasalah.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{noAuth}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 atau 503', () => pm.expect(pm.response.code).to.be.oneOf([200, 503]));",
+                  "const d = pm.response.json();",
+                  "console.log('checks:', JSON.stringify(d.checks));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Outfit",
+      "description": "Katalog outfit pemain. Baca butuh scope catalog:read, tulis butuh catalog:write.",
+      "item": [
+        {
+          "name": "Daftar outfit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{userId}}",
+                  "description": "Kosongkan untuk daftar semua pemain",
+                  "disabled": true
+                },
+                {
+                  "key": "isPublic",
+                  "value": "true",
+                  "description": "true/false",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "y2k",
+                  "description": "Cocokkan sebagian nama, tanpa peduli huruf besar-kecil",
+                  "disabled": true
+                },
+                {
+                  "key": "outfitId",
+                  "value": "{{outfitId}}",
+                  "description": "Boleh diulang atau dipisah koma",
+                  "disabled": true
+                },
+                {
+                  "key": "sort",
+                  "value": "mostLiked",
+                  "description": "recent | mostLiked | mostViewed",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Bawaan 20, maksimum 100",
+                  "disabled": false
+                },
+                {
+                  "key": "cursor",
+                  "value": "{{cursor}}",
+                  "description": "Dari nextCursor halaman sebelumnya",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Semua penyaring opsional. Tanpa userId, daftarnya mencakup semua pemain.\n\n`sort` menerima `recent` (bawaan), `mostLiked`, `mostViewed`. Cursor menyimpan sort asalnya — memakai cursor mostLiked pada sort=recent ditolak 400 cursor_sort_mismatch, bukan diam-diam mengembalikan halaman ngawur.\n\nScope: catalog:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('amplop daftar', () => pm.expect(d).to.have.all.keys('data','nextCursor','hasMore'));",
+                  "if (d.nextCursor) pm.collectionVariables.set('cursor', d.nextCursor);",
+                  "if (d.data.length) pm.collectionVariables.set('outfitId', d.data[0].outfitId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buat outfit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "description": "Dibangkitkan otomatis oleh skrip pre-request"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ]
+            },
+            "description": "Backend membangkitkan `referenceId` (UUID untuk RecommendationService:RegisterItemAsync). Simpan `recoItemId` balasannya lewat PATCH setelah RegisterItemAsync selesai.\n\n`templateId` boleh dikirim sebagai string maupun angka.\n`body` opsional — item saja tidak cukup untuk merender ulang avatar.\n\nHeader Idempotency-Key opsional di sini; kalau diisi, pengulangan dengan kunci sama mengembalikan respons pertama apa adanya.\n\nScope: catalog:write (+ actor:assert untuk X-User-Id)",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{userId}},\n  \"templateId\": \"{{templateId}}\",\n  \"name\": \"Y2K Streetwear\",\n  \"isPublic\": true,\n  \"customTags\": [\n    \"category:y2k\",\n    \"gender:male\"\n  ],\n  \"thumbnailAssetId\": 0,\n  \"items\": [\n    {\n      \"assetId\": 78872304386489,\n      \"slot\": \"Hair\",\n      \"name\": \"BLOND BARREL TWISTS DREADS\",\n      \"assetType\": \"HairAccessory\",\n      \"price\": 69\n    },\n    {\n      \"assetId\": 14433369343,\n      \"slot\": \"Jacket\",\n      \"name\": \"Hero Jacket Oni Blood Moon\",\n      \"assetType\": \"Accessory\",\n      \"price\": 79\n    }\n  ],\n  \"body\": {\n    \"colors\": {\n      \"head\": \"AE7C64\",\n      \"torso\": \"AE7C64\",\n      \"leftArm\": \"AE7C64\",\n      \"rightArm\": \"AE7C64\",\n      \"leftLeg\": \"AE7C64\",\n      \"rightLeg\": \"AE7C64\"\n    },\n    \"scales\": {\n      \"height\": 1.05,\n      \"width\": 1,\n      \"head\": 1,\n      \"depth\": 1,\n      \"bodyType\": 1,\n      \"proportion\": 0\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Kunci baru tiap kirim. Untuk menguji perilaku idempoten, matikan baris",
+                  "// ini lalu kirim dua kali dengan kunci yang sama.",
+                  "pm.collectionVariables.set('idempotencyKey', require('uuid').v4());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json();",
+                  "pm.collectionVariables.set('outfitId', d.outfitId);",
+                  "pm.collectionVariables.set('referenceId', d.referenceId);",
+                  "pm.test('referenceId dibangkitkan', () => pm.expect(d.referenceId).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Detail outfit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}"
+              ]
+            },
+            "description": "Outfit yang sudah di-soft-delete menjawab 410 outfit_deleted, bukan 404 — referenceId yang sudah beredar di feed tetap bisa dijelaskan.\n\nGET ini murni baca: tidak menaikkan viewCount.\n\nScope: catalog:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ubah outfit",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}"
+              ]
+            },
+            "description": "Field yang tidak dikirim dibiarkan apa adanya. Dipakai juga untuk menyimpan `recoItemId` balasan RegisterItemAsync.\n\nScope: catalog:write",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Y2K Streetwear v2\",\n  \"isPublic\": false,\n  \"customTags\": [\n    \"category:y2k\"\n  ],\n  \"recoItemId\": \"reco_7b31c9\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ganti seluruh item",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}",
+                "items"
+              ]
+            },
+            "description": "Mengganti isi item, bukan menambah. Satu assetId tidak boleh muncul dua kali; satu slot boleh diisi lebih dari satu asset.\n\nScope: catalog:write",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"assetId\": 78872304386489,\n      \"slot\": \"Hair\",\n      \"name\": \"BLOND BARREL TWISTS DREADS\",\n      \"assetType\": \"HairAccessory\",\n      \"price\": 69\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cari outfit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/search?q=zepeto",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "zepeto",
+                  "description": "Kata kunci; toleran salah ketik",
+                  "disabled": false
+                },
+                {
+                  "key": "userId",
+                  "value": "{{userId}}",
+                  "description": "",
+                  "disabled": true
+                },
+                {
+                  "key": "isPublic",
+                  "value": "true",
+                  "description": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Toleran salah ketik (trigram pg_trgm) dan, bila embedding terisi, juga mirip secara makna. Hasilnya peringkat, bukan halaman — tidak ada cursor.\n\nBeda dengan `q` di daftar outfit yang mencocokkan sebagian nama apa adanya.\n\nScope: catalog:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resolve referenceId",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "resolve"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Menukar sekumpulan referenceId dari feed rekomendasi jadi metadata render. Berhalaman: kirim daftar id yang sama persis di tiap halaman, cursor menandai posisi di dalam daftar itu.\n\n`notFound` hanya memuat id dari halaman ini.\n\nScope: catalog:read",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"referenceIds\": [\n    \"{{referenceId}}\",\n    \"550e8400-e29b-41d4-a716-446655440000\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Like & View",
+      "description": "Popularitas outfit. Disimpan dua lapis: tabel kejadian per pemain (bahan data latih generator outfit) plus counter di baris outfit untuk baca cepat.",
+      "item": [
+        {
+          "name": "Sukai outfit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}/likes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}",
+                "likes"
+              ]
+            },
+            "description": "Idempoten: menekan dua kali berakhir pada keadaan yang sama dan tetap 200, dengan `changed:false` pada yang kedua — bukan 409. Satu pemain satu like, ditegakkan primary key tabel.\n\nTanpa X-User-Id: 401 actor_required.\n\nScope: catalog:write + actor:assert"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('liked', () => pm.expect(d.liked).to.be.true);",
+                  "console.log('likeCount:', d.likeCount, 'changed:', d.changed);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Batalkan like",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}/likes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}",
+                "likes"
+              ]
+            },
+            "description": "Idempoten juga: membatalkan like yang tidak ada menjawab 200 dengan `changed:false`.\n\nScope: catalog:write + actor:assert"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Catat view",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}/views",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}",
+                "views"
+              ]
+            },
+            "description": "Tiap panggilan menambah SATU baris kejadian — pemain yang membuka outfit sama lima kali memang lima sinyal, dan berapa kali dilihat sebelum disukai adalah bagian dari datanya.\n\nPanggil saat outfit benar-benar tampil di layar pemain, bukan saat daftarnya diambil.\n\nX-User-Id opsional: view anonim tetap dicatat (user_id NULL), masih berguna untuk popularitas walau tidak untuk data latih per pemain.\n\nScope: catalog:write"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daftar terpopuler (mostLiked)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits?sort=mostLiked&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ],
+              "query": [
+                {
+                  "key": "sort",
+                  "value": "mostLiked",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Pintasan dari daftar outfit dengan sort=mostLiked.\n\nPaginasinya memakai keyset (likeCount, outfitId) — kunci yang berbeda dari urutan bawaan, jadi cursornya tidak bisa dipertukarkan antar sort.\n\nAngkanya bisa tertinggal paling lama CACHE_TTL (bawaan 1 menit) saat cache baca aktif. Balasan aksi like/view itu sendiri selalu akurat.\n\nScope: catalog:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rig (Body Template)",
+      "description": "Registry rig yang sudah di-upload ke Roblox. Roblox yang memegang asetnya; tabel ini hanya mencatat rig mana saja yang pernah dipakai.",
+      "item": [
+        {
+          "name": "Daftar rig",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/templates?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "templates"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Terbaru dulu.\n\nScope: catalog:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daftarkan rig",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/templates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "templates"
+              ]
+            },
+            "description": "Rig yang sudah terdaftar tidak ditimpa: nama dan gender yang sudah diisi lewat PATCH tidak hilang hanya karena outfit baru memakai rig yang sama. 201 kalau baru, 200 kalau sudah ada.\n\n`templateId` adalah Roblox asset id, boleh string maupun angka.\n\nScope: catalog:write",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": \"{{templateId}}\",\n  \"name\": \"Dev Rig\",\n  \"gender\": \"?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 atau 201', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Detail rig",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/templates/{{templateId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "templates",
+                "{{templateId}}"
+              ]
+            },
+            "description": "Scope: catalog:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ubah rig",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/templates/{{templateId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "templates",
+                "{{templateId}}"
+              ]
+            },
+            "description": "Mengisi nama dan gender yang belum diketahui saat rig pertama kali dipakai.\n\nScope: catalog:write",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Dev Rig\",\n  \"gender\": \"M\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Transaksi",
+      "description": "Catatan pembelian dari game server. Cashback ter-accrue otomatis saat transaksi dicatat.",
+      "item": [
+        {
+          "name": "Catat transaksi",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "description": "Dibangkitkan otomatis oleh skrip pre-request"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "transactions"
+              ]
+            },
+            "description": "Header Idempotency-Key WAJIB. Idempotensinya ditegakkan kolom unik di tabel TRANSACTION, bukan cache respons — jadi tetap berlaku walau proses backend sempat restart. Pengulangan menjawab 200 dengan `idempotentReplay: true`, bukan 201.\n\n`result` per item: success | aborted | failed. Hanya `success` yang dihitung sebagai spend (dasar cashback).\n\n`bundleId` terisi menandai item sebagai bagian paket: harganya adalah HARGA BUNDLE INDUK yang terulang di tiap bagian, dan perhitungan spend menghitung tiap bundleId sekali saja.\n\nScope: transactions:write",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{userId}},\n  \"universeId\": 7654321,\n  \"placeId\": 1234567,\n  \"jobId\": \"6b8f2c1e-0000-4a1b-9c3d-1f2e3d4c5b6a\",\n  \"status\": \"success\",\n  \"occurredAt\": \"2026-08-12T10:00:00Z\",\n  \"items\": [\n    {\n      \"assetId\": 78872304386489,\n      \"price\": 69,\n      \"result\": \"success\"\n    },\n    {\n      \"assetId\": 14433369343,\n      \"price\": 79,\n      \"result\": \"success\"\n    },\n    {\n      \"assetId\": 116123466288288,\n      \"price\": 45,\n      \"result\": \"failed\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Kunci baru tiap kirim. Untuk menguji perilaku idempoten, matikan baris",
+                  "// ini lalu kirim dua kali dengan kunci yang sama.",
+                  "pm.collectionVariables.set('idempotencyKey', require('uuid').v4());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 atau 201', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const d = pm.response.json();",
+                  "if (d.txId) pm.collectionVariables.set('txId', d.txId);",
+                  "console.log('idempotentReplay:', d.idempotentReplay === true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Riwayat transaksi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/transactions?userId={{userId}}&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{userId}}",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Terbaru dulu.\n\nScope: transactions:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cashback",
+      "description": "Semua nilai dalam Robux. Rate efektif = min(20% + bonus aktif, 40%); cashback per transaksi = floor(spend x rate).\n\nPERHATIKAN PEMBAGIAN SCOPE-nya: membaca saldo (cashback:read), membuat request redeem (cashback:redeem), dan MENUNTASKAN redeem (cashback:admin) adalah tiga izin berbeda. Game server boleh dua yang pertama; yang ketiga jalur uang keluar dan hanya untuk kunci dashboard — request di folder ini yang butuh itu memakai {{adminApiKey}}.",
+      "item": [
+        {
+          "name": "Ringkasan cashback",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/summary?userId={{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{userId}}",
+                  "description": "",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Saldo, rate berjalan + progres bonus, request pending.\n\nScope: cashback:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ledger cashback",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/entries?userId={{userId}}&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "entries"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{userId}}",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Ledger append-only pemain, terbaru dulu.\n\nScope: cashback:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buat request redeem",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/redeems",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "redeems"
+              ]
+            },
+            "description": "Seluruh saldo dipotong dan dijadikan satu request pending; fulfillment dikerjakan tim internal di luar sistem ini.\n\nMinimum 100 Robux, satu pending per pemain.\n\nScope: cashback:redeem",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{userId}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200/201 atau 422 kalau saldo kurang', () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 409, 422]));",
+                  "const d = pm.response.json();",
+                  "if (d.requestId) pm.collectionVariables.set('requestId', d.requestId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daftar request redeem",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/redeems?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "redeems"
+              ],
+              "query": [
+                {
+                  "key": "userId",
+                  "value": "{{userId}}",
+                  "description": "Kosongkan untuk antrean internal",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "pending",
+                  "description": "pending | completed | rejected",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "",
+                  "disabled": false
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Tanpa `userId` = antrean internal seluruh pemain.\n\nScope: cashback:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tuntaskan request redeem",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/redeems/{{requestId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "redeems",
+                "{{requestId}}"
+              ]
+            },
+            "description": "`completed` setelah fulfillment selesai, `rejected` untuk membatalkan dan mengembalikan saldo. Idempoten untuk status yang sama.\n\nJALUR UANG KELUAR — kunci game server sengaja TIDAK bisa memanggilnya (403 insufficient_scope). Request ini memakai {{adminApiKey}}.\n\nScope: cashback:admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"completed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminApiKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Yang dibuktikan di sini scope-nya lulus, bukan bahwa ada request",
+                  "// pending: itu bergantung saldo pemain. 404 berarti requestId belum",
+                  "// terisi karena Buat request redeem belum pernah berhasil.",
+                  "pm.test('scope lulus (bukan 403)', () => pm.expect(pm.response.code).to.not.eql(403));",
+                  "if (pm.response.code === 404) {",
+                  "  console.log('Belum ada request redeem. Catat transaksi bernilai besar dulu, lalu Buat request redeem.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tarik cashback (reversal)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/reversals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "reversals"
+              ]
+            },
+            "description": "Refund/chargeback menarik kembali cashback transaksi terkait. Saldo boleh menjadi minus. Idempoten per txId.\n\nJALUR UANG KELUAR — memakai {{adminApiKey}}.\n\nScope: cashback:admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"txId\": \"{{txId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminApiKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('scope lulus (bukan 403)', () => pm.expect(pm.response.code).to.not.eql(403));",
+                  "if (pm.response.code >= 400) {",
+                  "  console.log('Butuh txId dari transaksi yang cashback-nya sudah ter-accrue:', pm.response.json().error.code);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daftar event bonus",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "events"
+              ]
+            },
+            "description": "Jendela bonus event yang terjadwal.\n\nScope: cashback:read"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Jadwalkan event bonus",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "events"
+              ]
+            },
+            "description": "Menjadwalkan jendela bonus. Rate efektif tetap dibatasi 40%.\n\nMemakai {{adminApiKey}}.\n\nScope: cashback:admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Weekend Boost\",\n  \"startsAt\": \"2026-08-15T00:00:00Z\",\n  \"endsAt\": \"2026-08-17T23:59:59Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminApiKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 atau 201', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rekonsiliasi",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/reconciliation?from=2026-08-01T00:00:00Z&to=2026-08-31T23:59:59Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "reconciliation"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-08-01T00:00:00Z",
+                  "description": "RFC 3339",
+                  "disabled": false
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-31T23:59:59Z",
+                  "description": "RFC 3339",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Agregat ledger (Robux) untuk rekonsiliasi periodik.\n\nMemakai {{adminApiKey}}.\n\nScope: cashback:admin",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminApiKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Autentikasi — contoh penolakan",
+      "description": "Request yang SEHARUSNYA gagal. Ada di sini supaya batas keamanannya bisa diperiksa sendiri, bukan cuma dipercaya.",
+      "item": [
+        {
+          "name": "Tanpa kunci → 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ]
+            },
+            "description": "Semua kegagalan autentikasi dijawab sama persis (401 unauthenticated): bentuk token salah, keyId tidak ada, hash tidak cocok, kunci dicabut, kunci kedaluwarsa. Membedakannya akan memberi tahu penyerang seberapa jauh tebakannya sudah benar.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{noAuth}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('kode unauthenticated', () => pm.expect(pm.response.json().error.code).to.eql('unauthenticated'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Kunci AI mencoba menulis → 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ]
+            },
+            "description": "Kunci role `ai` hanya punya catalog:read + transactions:read. Isi {{aiApiKey}} dengan kunci role ai untuk mencobanya.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": {{userId}},\n  \"templateId\": \"{{templateId}}\",\n  \"name\": \"Y2K Streetwear\",\n  \"isPublic\": true,\n  \"customTags\": [\n    \"category:y2k\",\n    \"gender:male\"\n  ],\n  \"thumbnailAssetId\": 0,\n  \"items\": [\n    {\n      \"assetId\": 78872304386489,\n      \"slot\": \"Hair\",\n      \"name\": \"BLOND BARREL TWISTS DREADS\",\n      \"assetType\": \"HairAccessory\",\n      \"price\": 69\n    },\n    {\n      \"assetId\": 14433369343,\n      \"slot\": \"Jacket\",\n      \"name\": \"Hero Jacket Oni Blood Moon\",\n      \"assetType\": \"Accessory\",\n      \"price\": 79\n    }\n  ],\n  \"body\": {\n    \"colors\": {\n      \"head\": \"AE7C64\",\n      \"torso\": \"AE7C64\",\n      \"leftArm\": \"AE7C64\",\n      \"rightArm\": \"AE7C64\",\n      \"leftLeg\": \"AE7C64\",\n      \"rightLeg\": \"AE7C64\"\n    },\n    \"scales\": {\n      \"height\": 1.05,\n      \"width\": 1,\n      \"head\": 1,\n      \"depth\": 1,\n      \"bodyType\": 1,\n      \"proportion\": 0\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aiApiKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('kode insufficient_scope', () => pm.expect(pm.response.json().error.code).to.eql('insufficient_scope'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Kunci dashboard menyamar jadi pemain → 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ]
+            },
+            "description": "Menyatakan diri bertindak atas nama pemain (header X-User-Id) adalah kemampuan tersendiri: scope actor:assert. Hanya kunci game server yang punya. Kunci dashboard atau AI yang bocor tetap tidak bisa menyukai atau menukar cashback atas nama siapa pun.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminApiKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('kode actor_assert_forbidden', () => pm.expect(pm.response.json().error.code).to.eql('actor_assert_forbidden'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Game server menuntaskan redeem → 403",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/cashback/redeems/{{requestId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "cashback",
+                "redeems",
+                "{{requestId}}"
+              ]
+            },
+            "description": "Pembagian scope yang paling penting: kunci game server yang bocor tidak bisa mencairkan apa pun.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"completed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('kode insufficient_scope', () => pm.expect(pm.response.json().error.code).to.eql('insufficient_scope'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sort tidak dikenal → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits?sort=terpopuler",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits"
+              ],
+              "query": [
+                {
+                  "key": "sort",
+                  "value": "terpopuler",
+                  "description": "",
+                  "disabled": false
+                }
+              ]
+            },
+            "description": "Parameter yang salah ditolak terang-terangan, bukan diam-diam jatuh ke urutan bawaan."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('kode invalid_sort', () => pm.expect(pm.response.json().error.code).to.eql('invalid_sort'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Pembersihan",
+      "description": "Sengaja folder terakhir. Soft delete membuat outfit menjawab 410 pada semua endpoint lain, jadi menjalankannya lebih awal akan menggagalkan folder Like & View saat collection dijalankan berurutan dengan Collection Runner.",
+      "item": [
+        {
+          "name": "Hapus outfit (soft delete)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits/{{outfitId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits",
+                "{{outfitId}}"
+              ]
+            },
+            "description": "Hanya mengisi `deletedAt`; barisnya tidak pernah dihapus — referenceId yang sudah beredar di feed tetap bisa dijelaskan.\n\nResponsnya membawa `recoItemId` sebagai pengingat memanggil RemoveItemAsync; kalau tidak, outfit yang sudah dihapus tetap muncul di feed rekomendasi.\n\nSetelah ini, GET outfit yang sama menjawab 410 outfit_deleted, bukan 404.\n\nScope: catalog:write"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

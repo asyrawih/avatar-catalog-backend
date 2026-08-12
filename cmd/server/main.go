@@ -46,6 +46,11 @@ func run() error {
 	}
 	defer backend.close()
 
+	authenticator, err := newAuthenticator(cfg, backend.apiKeys, logger)
+	if err != nil {
+		return err
+	}
+
 	cashback := service.NewCashback(backend.cashback)
 	deps := httpapi.Deps{
 		Outfits:      service.NewOutfits(backend.outfits, backend.templates),
@@ -53,7 +58,8 @@ func run() error {
 		Cashback:     cashback,
 		Templates:    service.NewTemplates(backend.templates),
 		Idempotency:  backend.idempotency,
-		Auth:         newAuthenticator(cfg, logger),
+		Auth:         authenticator,
+		RateLimit:    newRateLimiter(cfg, logger),
 		Logger:       logger,
 		Readiness:    backend.readiness,
 	}
@@ -89,6 +95,19 @@ func run() error {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
+		// Kehabisan waktu saat shutdown BUKAN kegagalan proses.
+		//
+		// SHUTDOWN_TIMEOUT (10 detik) lebih pendek dari WriteTimeout (15
+		// detik), jadi satu request sah yang berjalan lama sudah cukup membuat
+		// Shutdown menyerah. Kalau itu dikembalikan sebagai error, proses keluar
+		// dengan status 1 dan orchestrator mencatat penghentian yang normal
+		// sebagai crash — lalu memicu alarm untuk hal yang memang seharusnya
+		// terjadi. Resource tetap ditutup oleh defer di atas.
+		if errors.Is(err, context.DeadlineExceeded) {
+			logger.Warn("shutdown kehabisan waktu; koneksi yang tersisa diputus paksa",
+				"timeout", cfg.ShutdownTimeout.String())
+			return nil
+		}
 		return err
 	}
 	logger.Info("server berhenti dengan bersih")
@@ -101,6 +120,7 @@ type backend struct {
 	transactions store.Transactions
 	cashback     store.Cashback
 	templates    store.Templates
+	apiKeys      store.APIKeys
 	idempotency  idempotency.Store
 	readiness    map[string]func(context.Context) error
 	closers      []func()
@@ -152,6 +172,7 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		b.transactions = postgres.NewTransactions(pool)
 		b.cashback = postgres.NewCashback(pool)
 		b.templates = postgres.NewTemplates(pool)
+		b.apiKeys = postgres.NewAPIKeys(pool)
 		b.readiness["postgres"] = pool.Ping
 		b.closers = append(b.closers, pool.Close)
 		logger.Info("penyimpanan postgres aktif", "max_conns", cfg.DBMaxConns)
@@ -167,6 +188,7 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		b.transactions = txStore
 		b.cashback = store.NewMemoryCashback(txStore)
 		b.templates = templateStore
+		b.apiKeys = store.NewMemoryAPIKeys()
 		logger.Warn("penyimpanan in-memory aktif", "catatan", "data hilang saat proses berhenti; isi DATABASE_URL untuk memakai postgres")
 	}
 
@@ -181,15 +203,39 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 // newAuthenticator memilih cara autentikasi berdasarkan konfigurasi.
 //
-// Autentikasi pemain sungguhan belum dikerjakan; tanpa AUTH_TOKENS server
-// menerima semua request dan hanya membaca identitas dari header.
-func newAuthenticator(cfg config.Config, logger *slog.Logger) httpapi.Authenticator {
-	if len(cfg.AuthTokens) == 0 {
-		logger.Warn("autentikasi nonaktif", "catatan", "isi AUTH_TOKENS untuk mewajibkan Bearer token")
-		return httpapi.UnverifiedActorAuth{}
+// Kunci API hidup di tabel api_key, jadi menerbitkan dan mencabutnya tidak
+// perlu redeploy — lihat cmd/apikey. AUTH_REQUIRED=false hanya untuk
+// pengembangan lokal, dan ditolak di produksi.
+func newAuthenticator(cfg config.Config, keys store.APIKeys, logger *slog.Logger) (httpapi.Authenticator, error) {
+	if !cfg.AuthRequired {
+		if cfg.Env == "production" {
+			return nil, errors.New("config: AUTH_REQUIRED=false ditolak saat APP_ENV=production")
+		}
+		logger.Warn("autentikasi nonaktif",
+			"catatan", "semua request diterima dan X-User-Id dipercaya apa adanya; hanya untuk pengembangan")
+		return httpapi.UnverifiedActorAuth{}, nil
 	}
-	logger.Info("autentikasi token layanan aktif", "jumlah_token", len(cfg.AuthTokens))
-	return httpapi.NewStaticTokenAuth(cfg.AuthTokens)
+	if keys == nil {
+		return nil, errors.New("config: AUTH_REQUIRED=true butuh penyimpanan kunci")
+	}
+	logger.Info("autentikasi kunci API aktif")
+	return httpapi.NewKeyAuth(keys, logger), nil
+}
+
+// newRateLimiter merangkai pembatas request per kunci API.
+//
+// Batasnya per proses: tiap replika menghitung sendiri, jadi batas efektif satu
+// kunci adalah RATE_LIMIT_PER_SECOND dikali jumlah replika. Hitungan bersama
+// lintas replika butuh Redis, dan itu belum dikerjakan — lihat docs/auth.md.
+func newRateLimiter(cfg config.Config, logger *slog.Logger) httpapi.Limiter {
+	if cfg.RateLimitPerSecond <= 0 {
+		logger.Warn("pembatas request nonaktif",
+			"catatan", "isi RATE_LIMIT_PER_SECOND supaya satu konsumen tidak bisa menghabiskan kapasitas yang lain")
+		return nil
+	}
+	logger.Info("pembatas request aktif",
+		"per_detik_per_kunci", cfg.RateLimitPerSecond, "catatan", "batas dihitung per proses, bukan per cluster")
+	return httpapi.NewRateLimiter(cfg.RateLimitPerSecond)
 }
 
 func newLogger(level string) *slog.Logger {

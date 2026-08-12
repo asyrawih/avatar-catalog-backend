@@ -92,11 +92,6 @@ spec:
               value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@avatar-catalog-db:5432/$(POSTGRES_DB)?sslmode=disable
             - name: REDIS_URL
               value: redis://avatar-catalog-redis:6379/0
-            - name: AUTH_TOKENS
-              valueFrom:
-                secretKeyRef:
-                  name: avatar-catalog-secret
-                  key: AUTH_TOKENS
           # Image distroless tanpa shell/curl, jadi semua probe lewat HTTP.
           # healthz cukup membuktikan proses hidup; readyz ikut memeriksa
           # Postgres dan Redis, jadi hanya dipakai readiness — bukan liveness,

@@ -1,8 +1,8 @@
 // Package ratelimit menyediakan pembatas jendela-tetap sederhana.
 //
-// Dipakai untuk endpoint laporan sync run: worker yang kena rate limit di sisi
-// Roblox cenderung retry beruntun, dan tanpa pembatas laporan gagal separuh
-// akan membanjiri backend.
+// Dipakai membatasi request per kunci API (lihat internal/httpapi): satu
+// konsumen yang mengamuk — worker yang retry beruntun, atau klien API publik
+// yang salah tulis loop — tidak boleh menghabiskan kapasitas konsumen lain.
 package ratelimit
 
 import (
@@ -17,6 +17,8 @@ type FixedWindow struct {
 	limit   int
 	windowD time.Duration
 	now     func() time.Time
+	// lastPrune menahan pembersihan supaya tidak berjalan di setiap request.
+	lastPrune time.Time
 }
 
 type window struct {
@@ -41,6 +43,8 @@ func (f *FixedWindow) Allow(key string) (bool, int) {
 	defer f.mu.Unlock()
 
 	now := f.now()
+	f.pruneLocked(now)
+
 	w, ok := f.counts[key]
 	if !ok || now.Sub(w.startedAt) >= f.windowD {
 		f.counts[key] = window{startedAt: now, count: 1}
@@ -55,4 +59,29 @@ func (f *FixedWindow) Allow(key string) (bool, int) {
 	w.count++
 	f.counts[key] = w
 	return true, 0
+}
+
+// pruneInterval menahan pembersihan supaya tidak berjalan di setiap request.
+const pruneInterval = time.Minute
+
+// pruneLocked membuang jendela yang sudah lewat.
+//
+// Tanpa ini map tumbuh selamanya: satu entri per kunci yang pernah dipakai,
+// termasuk kunci yang sudah dicabut dan alamat yang tidak pernah kembali.
+// Untuk pembatasan per kunci API jumlahnya memang kecil, tapi pembatas ini
+// juga dipakai dengan kunci lain — biaya membersihkannya jauh lebih murah
+// daripada mencari tahu belakangan kenapa memori proses naik terus.
+//
+// Pemanggil wajib memegang f.mu.
+func (f *FixedWindow) pruneLocked(now time.Time) {
+	if now.Sub(f.lastPrune) < pruneInterval {
+		return
+	}
+	f.lastPrune = now
+
+	for key, w := range f.counts {
+		if now.Sub(w.startedAt) >= f.windowD {
+			delete(f.counts, key)
+		}
+	}
 }

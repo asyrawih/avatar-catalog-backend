@@ -12,7 +12,6 @@ import (
 
 	"github.com/hanan/avatar-catalog-backend/internal/cache"
 	"github.com/hanan/avatar-catalog-backend/internal/model"
-	"github.com/hanan/avatar-catalog-backend/internal/paging"
 	"github.com/hanan/avatar-catalog-backend/internal/store"
 	"github.com/hanan/avatar-catalog-backend/internal/store/cached"
 )
@@ -136,7 +135,7 @@ func (c *countingOutfits) Get(ctx context.Context, outfitID string) (model.Outfi
 	return c.Outfits.Get(ctx, outfitID)
 }
 
-func (c *countingOutfits) List(ctx context.Context, f store.OutfitFilter, after *paging.KeysetCursor, limit int) ([]model.Outfit, bool, error) {
+func (c *countingOutfits) List(ctx context.Context, f store.OutfitFilter, after *store.OutfitCursor, limit int) ([]model.Outfit, bool, error) {
 	c.lists++
 	return c.Outfits.List(ctx, f, after, limit)
 }

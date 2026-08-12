@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hanan/avatar-catalog-backend/internal/model"
-	"github.com/hanan/avatar-catalog-backend/internal/paging"
 	"github.com/hanan/avatar-catalog-backend/internal/store"
 )
 
@@ -29,6 +28,7 @@ var _ store.Outfits = (*Outfits)(nil)
 const outfitColumns = `
 	o.outfit_id, o.reference_id::text, o.reco_item_id, o.user_id, o.template_id,
 	o.name, o.is_public, o.custom_tags, o.body, coalesce(o.thumbnail_asset_id, 0),
+	o.like_count, o.view_count,
 	o.created_at, o.updated_at, o.deleted_at`
 
 // Create menyimpan outfit beserta itemnya dalam satu transaksi.
@@ -84,15 +84,7 @@ func (s *Outfits) Get(ctx context.Context, outfitID string) (model.Outfit, error
 // worker yang mengubah katalog di tengah penelusuran tidak menggeser hasil.
 // Filter kosong dilewatkan sebagai NULL sehingga satu query melayani daftar
 // per pemain maupun daftar lintas pemain.
-func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.KeysetCursor, limit int) ([]model.Outfit, bool, error) {
-	var (
-		cursorAt time.Time
-		cursorID string
-	)
-	if after != nil {
-		cursorAt, cursorID = after.At, after.ID
-	}
-
+func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *store.OutfitCursor, limit int) ([]model.Outfit, bool, error) {
 	var userID *int64
 	if f.UserID != 0 {
 		userID = &f.UserID
@@ -103,26 +95,56 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 		outfitIDs = f.OutfitIDs
 	}
 
+	// Kunci urutan dan predikat cursornya berbeda per sort, jadi bagian itu
+	// dirakit di Go. Nama kolomnya berasal dari konstanta di bawah — tidak
+	// pernah dari input klien — dan sisa query tetap berparameter.
+	var (
+		orderBy    string
+		cursorPred string
+		cursorKey  any // $3: timestamptz untuk urutan waktu, integer untuk pencacah
+		cursorID   string
+	)
+	switch {
+	case f.Sort.ByCount():
+		column := "o.like_count"
+		if f.Sort == store.SortMostViewed {
+			column = "o.view_count"
+		}
+		orderBy = column + " DESC, o.outfit_id ASC"
+		cursorPred = `($3::integer IS NULL
+		       OR ` + column + ` < $3
+		       OR (` + column + ` = $3 AND o.outfit_id > $4))`
+		if after != nil && after.Count != nil {
+			cursorKey, cursorID = after.Count.Count, after.Count.ID
+		}
+	default:
+		orderBy = "o.updated_at DESC, o.outfit_id ASC"
+		cursorPred = `($3::timestamptz IS NULL
+		       OR o.updated_at < $3
+		       OR (o.updated_at = $3 AND o.outfit_id > $4))`
+		if after != nil && after.Recency != nil {
+			cursorKey, cursorID = after.Recency.At, after.Recency.ID
+		}
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		SELECT`+outfitColumns+`
 		FROM outfit o
 		WHERE o.deleted_at IS NULL
 		  AND ($1::bigint IS NULL OR o.user_id = $1)
 		  AND ($2::boolean IS NULL OR o.is_public = $2)
-		  AND ($3::timestamptz IS NULL
-		       OR o.updated_at < $3
-		       OR (o.updated_at = $3 AND o.outfit_id > $4))
+		  AND `+cursorPred+`
 		  AND ($6::text[] IS NULL OR o.outfit_id = ANY($6))
 		  AND ($7::text IS NULL OR o.name ILIKE $7 ESCAPE '\')
-		ORDER BY o.updated_at DESC, o.outfit_id ASC
+		ORDER BY `+orderBy+`
 		LIMIT $5`,
-		userID, f.IsPublic, nullableTime(after, cursorAt), cursorID, limit+1,
+		userID, f.IsPublic, cursorKey, cursorID, limit+1,
 		outfitIDs, likePattern(f.Keyword))
 	if err != nil {
 		return nil, false, err
 	}
 
-	outfits, err := collectOutfits(rows)
+	outfits, err := collectOutfits(rows, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -194,7 +216,7 @@ func (s *Outfits) Search(ctx context.Context, f store.OutfitFilter, qEmbedding [
 		return nil, err
 	}
 
-	outfits, err := collectOutfits(rows)
+	outfits, err := collectOutfits(rows, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +235,181 @@ func (s *Outfits) SetNameEmbedding(ctx context.Context, outfitID string, embeddi
 		return err
 	}
 	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// Like mencatat like lalu menaikkan like_count dalam satu transaksi, sehingga
+// log kejadian dan ringkasannya tidak pernah berpisah.
+//
+// Keunikan ditegakkan kunci primer OUTFIT_LIKE, bukan pemeriksaan "sudah suka
+// belum?" di aplikasi: dua request bersamaan dari pemain yang sama akan
+// dua-duanya lolos pemeriksaan itu lalu menaikkan counter dua kali.
+// ON CONFLICT DO NOTHING membuat yang kedua tidak menulis apa pun, dan
+// RowsAffected memberi tahu mana yang benar-benar baru.
+func (s *Outfits) Like(ctx context.Context, outfitID string, userID int64, at time.Time) (store.EngagementCounts, error) {
+	var counts store.EngagementCounts
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := ensureOutfitAlive(ctx, tx, outfitID); err != nil {
+			return err
+		}
+		if err := ensurePlayer(ctx, tx, userID); err != nil {
+			return err
+		}
+
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO outfit_like (outfit_id, user_id, created_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (outfit_id, user_id) DO NOTHING`, outfitID, userID, at)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			counts, err = readCounts(ctx, tx, outfitID)
+			return err
+		}
+
+		counts, err = bumpCounts(ctx, tx,
+			`UPDATE outfit SET like_count = like_count + 1 WHERE outfit_id = $1
+			 RETURNING like_count, view_count`, outfitID)
+		counts.Changed = err == nil
+		return err
+	})
+	if err != nil {
+		return store.EngagementCounts{}, err
+	}
+	return counts, nil
+}
+
+// Unlike menghapus like lalu menurunkan like_count dalam satu transaksi.
+func (s *Outfits) Unlike(ctx context.Context, outfitID string, userID int64) (store.EngagementCounts, error) {
+	var counts store.EngagementCounts
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := ensureOutfitAlive(ctx, tx, outfitID); err != nil {
+			return err
+		}
+
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM outfit_like WHERE outfit_id = $1 AND user_id = $2`, outfitID, userID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			counts, err = readCounts(ctx, tx, outfitID)
+			return err
+		}
+
+		// greatest(...) menjaga CHECK (like_count >= 0) tetap terpenuhi kalau
+		// counter sempat melenceng di bawah jumlah barisnya.
+		counts, err = bumpCounts(ctx, tx,
+			`UPDATE outfit SET like_count = greatest(like_count - 1, 0) WHERE outfit_id = $1
+			 RETURNING like_count, view_count`, outfitID)
+		counts.Changed = err == nil
+		return err
+	})
+	if err != nil {
+		return store.EngagementCounts{}, err
+	}
+	return counts, nil
+}
+
+// RecordView menambahkan satu kejadian lihat lalu menaikkan view_count.
+func (s *Outfits) RecordView(ctx context.Context, outfitID string, userID int64, at time.Time) (store.EngagementCounts, error) {
+	var counts store.EngagementCounts
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := ensureOutfitAlive(ctx, tx, outfitID); err != nil {
+			return err
+		}
+		if userID != 0 {
+			if err := ensurePlayer(ctx, tx, userID); err != nil {
+				return err
+			}
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO outfit_view (outfit_id, user_id, viewed_at)
+			VALUES ($1, $2, $3)`, outfitID, nullableInt64(userID), at); err != nil {
+			return err
+		}
+
+		var err error
+		counts, err = bumpCounts(ctx, tx,
+			`UPDATE outfit SET view_count = view_count + 1 WHERE outfit_id = $1
+			 RETURNING like_count, view_count`, outfitID)
+		counts.Changed = err == nil
+		return err
+	})
+	if err != nil {
+		return store.EngagementCounts{}, err
+	}
+	return counts, nil
+}
+
+// bumpCounts menjalankan UPDATE ... RETURNING dan membaca angka hasilnya.
+// Angka diambil dari pernyataan yang menaikkannya, bukan dari pembacaan
+// terpisah, supaya penulisan bersamaan tidak saling melaporkan angka lama.
+func bumpCounts(ctx context.Context, tx pgx.Tx, sql, outfitID string) (store.EngagementCounts, error) {
+	var counts store.EngagementCounts
+	err := tx.QueryRow(ctx, sql, outfitID).Scan(&counts.LikeCount, &counts.ViewCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EngagementCounts{}, store.ErrNotFound
+	}
+	return counts, err
+}
+
+// readCounts membaca popularitas tanpa mengubahnya — dipakai saat penulisan
+// ternyata tidak mengubah apa pun (like berulang, unlike yang tidak ada).
+func readCounts(ctx context.Context, tx pgx.Tx, outfitID string) (store.EngagementCounts, error) {
+	var counts store.EngagementCounts
+	err := tx.QueryRow(ctx,
+		`SELECT like_count, view_count FROM outfit WHERE outfit_id = $1`, outfitID).
+		Scan(&counts.LikeCount, &counts.ViewCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EngagementCounts{}, store.ErrNotFound
+	}
+	return counts, err
+}
+
+// Liked melaporkan outfit mana saja dari outfitIDs yang sudah disukai userID.
+func (s *Outfits) Liked(ctx context.Context, userID int64, outfitIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(outfitIDs))
+	if userID == 0 || len(outfitIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT outfit_id FROM outfit_like WHERE user_id = $1 AND outfit_id = ANY($2)`,
+		userID, outfitIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// ensureOutfitAlive menolak like/view pada outfit yang tidak ada atau sudah
+// di-soft-delete. FOR UPDATE menahan baris sampai transaksi selesai, jadi
+// counter tidak bisa hilang karena dua penulisan bersamaan saling menimpa.
+func ensureOutfitAlive(ctx context.Context, tx pgx.Tx, outfitID string) error {
+	var deletedAt *time.Time
+	err := tx.QueryRow(ctx,
+		`SELECT deleted_at FROM outfit WHERE outfit_id = $1 FOR UPDATE`, outfitID).Scan(&deletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if deletedAt != nil {
 		return store.ErrNotFound
 	}
 	return nil
@@ -251,7 +448,7 @@ func (s *Outfits) ListByReferenceIDs(ctx context.Context, referenceIDs []string)
 		return nil, err
 	}
 
-	outfits, err := collectOutfits(rows)
+	outfits, err := collectOutfits(rows, len(referenceIDs))
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +552,7 @@ func (s *Outfits) itemsFor(ctx context.Context, outfitIDs []string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	return collectOutfitItems(rows)
+	return collectOutfitItems(rows, len(outfitIDs))
 }
 
 func itemsForTx(ctx context.Context, tx pgx.Tx, outfitIDs []string) (map[string][]model.OutfitItem, error) {
@@ -363,7 +560,7 @@ func itemsForTx(ctx context.Context, tx pgx.Tx, outfitIDs []string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	return collectOutfitItems(rows)
+	return collectOutfitItems(rows, len(outfitIDs))
 }
 
 const outfitItemsQuery = `
@@ -373,10 +570,17 @@ const outfitItemsQuery = `
 	WHERE outfit_id = ANY($1)
 	ORDER BY outfit_id, slot`
 
-func collectOutfitItems(rows pgx.Rows) (map[string][]model.OutfitItem, error) {
+// collectOutfitItems mengelompokkan item per outfit.
+//
+// outfits adalah jumlah outfit yang diminta, dipakai sebagai kapasitas awal.
+// Ini jalur terpanas di seluruh API: satu halaman bisa 100 outfit x sampai 30
+// item, dan tanpa kapasitas awal tiap outfit memicu rangkaian realokasi slice
+// (1→2→4→8→16→32) plus rehash map berulang — ratusan alokasi per request untuk
+// ukuran yang sebenarnya sudah diketahui sejak awal.
+func collectOutfitItems(rows pgx.Rows, outfits int) (map[string][]model.OutfitItem, error) {
 	defer rows.Close()
 
-	out := make(map[string][]model.OutfitItem)
+	out := make(map[string][]model.OutfitItem, outfits)
 	for rows.Next() {
 		var (
 			outfitID string
@@ -387,7 +591,13 @@ func collectOutfitItems(rows pgx.Rows) (map[string][]model.OutfitItem, error) {
 			&item.BundleID, &item.BundleName); err != nil {
 			return nil, err
 		}
-		out[outfitID] = append(out[outfitID], item)
+		slice, ok := out[outfitID]
+		if !ok {
+			// Outfit tipikal membawa jauh di bawah MaxOutfitItems; delapan
+			// menutup hampir semuanya tanpa memesan kebanyakan untuk yang kecil.
+			slice = make([]model.OutfitItem, 0, 8)
+		}
+		out[outfitID] = append(slice, item)
 	}
 	return out, rows.Err()
 }
@@ -431,6 +641,7 @@ func scanOutfit(row scanner) (model.Outfit, error) {
 	)
 	err := row.Scan(&o.OutfitID, &o.ReferenceID, &o.RecoItemID, &o.UserID, &o.TemplateID,
 		&o.Name, &o.IsPublic, &o.CustomTags, &body, &o.ThumbnailAssetID,
+		&o.LikeCount, &o.ViewCount,
 		&o.CreatedAt, &o.UpdatedAt, &o.DeletedAt)
 	if err != nil {
 		return model.Outfit{}, err
@@ -528,10 +739,15 @@ func unmarshalBody(raw []byte) (*model.AvatarBody, error) {
 	return &out, nil
 }
 
-func collectOutfits(rows pgx.Rows) ([]model.Outfit, error) {
+// collectOutfits membaca seluruh baris hasil.
+//
+// capacity adalah batas atas jumlah baris yang sudah diketahui pemanggil
+// (limit halaman, atau panjang daftar id). Tanpa itu slice tumbuh dari nol
+// dengan belasan realokasi per request, menyalin ulang struct yang tidak kecil.
+func collectOutfits(rows pgx.Rows, capacity int) ([]model.Outfit, error) {
 	defer rows.Close()
 
-	var out []model.Outfit
+	out := make([]model.Outfit, 0, capacity)
 	for rows.Next() {
 		o, err := scanOutfit(rows)
 		if err != nil {

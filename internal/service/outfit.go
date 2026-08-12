@@ -88,19 +88,22 @@ type Outfits struct {
 	templates store.Templates
 	// embedder opsional; nil berarti pencarian leksikal saja. Lihat embed.go.
 	embedder Embedder
-	now      func() time.Time
-	newID    func() string
-	newRefID func() string
+	// embedSlots memplafon jumlah embedding yang berjalan bersamaan.
+	embedSlots chan struct{}
+	now        func() time.Time
+	newID      func() string
+	newRefID   func() string
 }
 
 // NewOutfits merangkai service outfit.
 func NewOutfits(outfits store.Outfits, templates store.Templates) *Outfits {
 	return &Outfits{
-		outfits:   outfits,
-		templates: templates,
-		now:       func() time.Time { return time.Now().UTC() },
-		newID:     newOutfitID,
-		newRefID:  newUUID,
+		outfits:    outfits,
+		templates:  templates,
+		embedSlots: make(chan struct{}, maxConcurrentEmbeds),
+		now:        func() time.Time { return time.Now().UTC() },
+		newID:      newOutfitID,
+		newRefID:   newUUID,
 	}
 }
 
@@ -117,6 +120,24 @@ type ListOutfitFilter struct {
 	IsPublic  *bool    // nil = publik dan privat
 	OutfitIDs []string // kosong = semua outfit
 	Keyword   string   // kosong = tanpa pencarian nama
+	// Sort apa adanya dari query string; divalidasi di List.
+	Sort string
+}
+
+// parseOutfitSort menerjemahkan nilai query string menjadi urutan yang
+// dikenali penyimpanan. Kosong berarti urutan bawaan, terbaru dulu.
+func parseOutfitSort(raw string) (store.OutfitSort, error) {
+	switch raw {
+	case "", "recent":
+		return store.SortRecent, nil
+	case string(store.SortMostLiked):
+		return store.SortMostLiked, nil
+	case string(store.SortMostViewed):
+		return store.SortMostViewed, nil
+	default:
+		return "", apierr.BadRequest("invalid_sort",
+			"Parameter sort harus salah satu dari: recent, mostLiked, mostViewed")
+	}
 }
 
 // List mengembalikan outfit, terbaru dulu.
@@ -136,14 +157,14 @@ func (s *Outfits) List(ctx context.Context, f ListOutfitFilter, rawCursor string
 		return OutfitPage{}, apierr.BadRequest("too_many_outfit_ids", fmt.Sprintf("Maksimal %d outfitId per permintaan", MaxOutfitIDs))
 	}
 
-	var cursor paging.KeysetCursor
-	present, err := paging.Decode(rawCursor, &cursor)
+	sort, err := parseOutfitSort(f.Sort)
 	if err != nil {
-		return OutfitPage{}, apierr.BadRequest("invalid_cursor", "Cursor tidak bisa dibaca")
+		return OutfitPage{}, err
 	}
-	after := &cursor
-	if !present {
-		after = nil
+
+	after, err := decodeListCursor(rawCursor, sort)
+	if err != nil {
+		return OutfitPage{}, err
 	}
 
 	limit = paging.ClampLimit(limit, DefaultPageSize, MaxPageSize)
@@ -152,6 +173,7 @@ func (s *Outfits) List(ctx context.Context, f ListOutfitFilter, rawCursor string
 		IsPublic:  f.IsPublic,
 		OutfitIDs: f.OutfitIDs,
 		Keyword:   keyword,
+		Sort:      sort,
 	}, after, limit)
 	if err != nil {
 		return OutfitPage{}, err
@@ -159,13 +181,71 @@ func (s *Outfits) List(ctx context.Context, f ListOutfitFilter, rawCursor string
 
 	page := OutfitPage{Outfits: rows, HasMore: hasMore}
 	if hasMore && len(rows) > 0 {
-		last := rows[len(rows)-1]
-		page.NextCursor, err = paging.Encode(paging.KeysetCursor{At: last.UpdatedAt, ID: last.OutfitID})
+		page.NextCursor, err = encodeListCursor(rows[len(rows)-1], sort)
 		if err != nil {
 			return OutfitPage{}, err
 		}
 	}
 	return page, nil
+}
+
+// listCursor adalah bentuk cursor daftar outfit yang dikirim ke klien.
+//
+// Sort ikut dibawa karena kunci paginasi berbeda per urutan: cursor "terbaru"
+// yang dipakai pada urutan "terpopuler" akan menyaring baris dengan kunci yang
+// salah dan diam-diam mengembalikan halaman ngawur. Dengan sort tersimpan di
+// dalamnya, ketidakcocokan itu jadi error yang kelihatan.
+//
+// Cursor lama dari sebelum ada pengurutan tidak punya field sort; nilainya
+// kosong dan itu berarti urutan bawaan, jadi cursor yang sudah beredar tetap
+// sah.
+type listCursor struct {
+	Sort  string     `json:"sort,omitempty"`
+	At    *time.Time `json:"at,omitempty"`
+	Count *int       `json:"count,omitempty"`
+	ID    string     `json:"id"`
+}
+
+func decodeListCursor(raw string, sort store.OutfitSort) (*store.OutfitCursor, error) {
+	var c listCursor
+	present, err := paging.Decode(raw, &c)
+	if err != nil {
+		return nil, apierr.BadRequest("invalid_cursor", "Cursor tidak bisa dibaca")
+	}
+	if !present {
+		return nil, nil
+	}
+	if c.Sort != string(sort) {
+		return nil, apierr.BadRequest("cursor_sort_mismatch",
+			"Cursor ini milik urutan lain; ulangi dari halaman pertama setelah mengubah sort")
+	}
+
+	if sort.ByCount() {
+		if c.Count == nil {
+			return nil, apierr.BadRequest("invalid_cursor", "Cursor tidak bisa dibaca")
+		}
+		return &store.OutfitCursor{Count: &paging.CountCursor{Count: *c.Count, ID: c.ID}}, nil
+	}
+	if c.At == nil {
+		return nil, apierr.BadRequest("invalid_cursor", "Cursor tidak bisa dibaca")
+	}
+	return &store.OutfitCursor{Recency: &paging.KeysetCursor{At: *c.At, ID: c.ID}}, nil
+}
+
+func encodeListCursor(last model.Outfit, sort store.OutfitSort) (string, error) {
+	c := listCursor{Sort: string(sort), ID: last.OutfitID}
+	switch sort {
+	case store.SortMostLiked:
+		count := last.LikeCount
+		c.Count = &count
+	case store.SortMostViewed:
+		count := last.ViewCount
+		c.Count = &count
+	default:
+		at := last.UpdatedAt
+		c.At = &at
+	}
+	return paging.Encode(c)
 }
 
 // SearchOutfitFilter menyaring pencarian outfit dari sisi API.
@@ -458,6 +538,119 @@ func (s *Outfits) Resolve(ctx context.Context, referenceIDs []string, rawCursor 
 }
 
 // load mengambil outfit dan menerjemahkan keadaannya menjadi 404 atau 410.
+// Engagement adalah hasil pencatatan like atau view, dikembalikan supaya klien
+// bisa langsung memperbarui tampilannya tanpa GET susulan.
+type Engagement struct {
+	OutfitID string
+	// Changed melaporkan apakah permintaan ini benar-benar mengubah sesuatu.
+	// false pada like berulang dari pemain yang sama — bukan error, karena
+	// tombol suka yang ditekan dua kali harus berakhir pada keadaan yang sama.
+	Changed   bool
+	Liked     bool
+	LikeCount int
+	ViewCount int
+}
+
+// Like mencatat bahwa pemanggil menyukai sebuah outfit.
+//
+// Aktor wajib ada: like tanpa identitas tidak bisa dibatalkan, tidak bisa
+// dijaga tetap satu per pemain, dan tidak berguna sebagai data latih karena
+// justru pasangan (pemain, outfit) yang jadi sinyalnya.
+func (s *Outfits) Like(ctx context.Context, actor Actor, outfitID string) (Engagement, error) {
+	outfit, err := s.requireEngagementTarget(ctx, actor, outfitID)
+	if err != nil {
+		return Engagement{}, err
+	}
+
+	counts, err := s.outfits.Like(ctx, outfit.OutfitID, actor.UserID, s.now())
+	if err != nil {
+		return Engagement{}, mapEngagementErr(err, outfitID)
+	}
+	return newEngagement(outfit.OutfitID, counts, true), nil
+}
+
+// Unlike membatalkan like pemanggil. Idempoten seperti Like.
+func (s *Outfits) Unlike(ctx context.Context, actor Actor, outfitID string) (Engagement, error) {
+	outfit, err := s.requireEngagementTarget(ctx, actor, outfitID)
+	if err != nil {
+		return Engagement{}, err
+	}
+
+	counts, err := s.outfits.Unlike(ctx, outfit.OutfitID, actor.UserID)
+	if err != nil {
+		return Engagement{}, mapEngagementErr(err, outfitID)
+	}
+	return newEngagement(outfit.OutfitID, counts, false), nil
+}
+
+// RecordView mencatat satu kejadian lihat.
+//
+// Berbeda dengan Like, aktor boleh kosong: view anonim masih berarti untuk
+// popularitas walau tidak terpakai sebagai sinyal per pemain. Tiap panggilan
+// menambah satu baris — klien yang memanggilnya dua kali memang melaporkan dua
+// kali dilihat.
+func (s *Outfits) RecordView(ctx context.Context, actor Actor, outfitID string) (Engagement, error) {
+	outfit, err := s.load(ctx, outfitID)
+	if err != nil {
+		return Engagement{}, err
+	}
+
+	counts, err := s.outfits.RecordView(ctx, outfit.OutfitID, actor.UserID, s.now())
+	if err != nil {
+		return Engagement{}, mapEngagementErr(err, outfitID)
+	}
+	return newEngagement(outfit.OutfitID, counts, false), nil
+}
+
+// newEngagement menyusun balasan dari angka yang dikembalikan penyimpanan.
+//
+// Angkanya sengaja TIDAK dihitung dari outfit yang barusan dibaca lalu ditambah
+// satu: pembacaan itu bisa dilayani cache yang tertinggal, sehingga balasan
+// atas aksi yang baru saja dilakukan klien justru melaporkan angka lama.
+func newEngagement(outfitID string, counts store.EngagementCounts, liked bool) Engagement {
+	return Engagement{
+		OutfitID:  outfitID,
+		Changed:   counts.Changed,
+		Liked:     liked,
+		LikeCount: counts.LikeCount,
+		ViewCount: counts.ViewCount,
+	}
+}
+
+// LikedBy melaporkan outfit mana saja dari daftar yang sudah disukai aktor.
+// Aktor anonim mendapat peta kosong, bukan error: daftar tetap bisa dibaca
+// tanpa login, hanya tanpa penanda "sudah kamu suka".
+func (s *Outfits) LikedBy(ctx context.Context, actor Actor, outfits []model.Outfit) (map[string]bool, error) {
+	if !actor.Present || len(outfits) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(outfits))
+	for _, o := range outfits {
+		ids = append(ids, o.OutfitID)
+	}
+	return s.outfits.Liked(ctx, actor.UserID, ids)
+}
+
+// requireEngagementTarget memastikan outfit ada, hidup, dan pemanggilnya
+// dikenali.
+func (s *Outfits) requireEngagementTarget(ctx context.Context, actor Actor, outfitID string) (model.Outfit, error) {
+	if !actor.Present {
+		return model.Outfit{}, apierr.Unauthorized("actor_required",
+			"Menyukai outfit butuh identitas pemain")
+	}
+	return s.load(ctx, outfitID)
+}
+
+// mapEngagementErr menerjemahkan balapan antara pembacaan dan penulisan: outfit
+// yang lolos load bisa saja sudah dihapus saat penulisan berjalan.
+func mapEngagementErr(err error, outfitID string) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return apierr.NotFound("outfit_not_found", fmt.Sprintf("Outfit %s tidak ditemukan", outfitID))
+	}
+	return err
+}
+
 func (s *Outfits) load(ctx context.Context, outfitID string) (model.Outfit, error) {
 	if strings.TrimSpace(outfitID) == "" {
 		return model.Outfit{}, apierr.NotFound("outfit_not_found", "Outfit tidak ditemukan")

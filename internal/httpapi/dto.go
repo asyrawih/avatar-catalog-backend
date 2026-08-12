@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/hanan/avatar-catalog-backend/internal/model"
+	"github.com/hanan/avatar-catalog-backend/internal/service"
 )
 
 // listEnvelope adalah bentuk seragam untuk semua daftar berhalaman.
@@ -53,7 +54,15 @@ type outfitSummaryDTO struct {
 	Items            []outfitItemDTO `json:"items"`
 	Body             *avatarBodyDTO  `json:"body"`
 	ThumbnailAssetID int64           `json:"thumbnailAssetId,omitempty"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
+	// likeCount dan viewCount adalah popularitas outfit. Angkanya bisa
+	// tertinggal paling lama selama CACHE_TTL saat cache baca aktif — cukup
+	// untuk ditampilkan, jangan dipakai sebagai sumber kebenaran akuntansi.
+	LikeCount int `json:"likeCount"`
+	ViewCount int `json:"viewCount"`
+	// likedByMe hanya muncul untuk pemanggil yang dikenali; permintaan anonim
+	// tidak membawanya sama sekali, bukan membawanya bernilai false.
+	LikedByMe *bool     `json:"likedByMe,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 func newOutfitSummary(o model.Outfit) outfitSummaryDTO {
@@ -68,16 +77,46 @@ func newOutfitSummary(o model.Outfit) outfitSummaryDTO {
 		Items:            newOutfitItems(o.Items),
 		Body:             newAvatarBody(o.Body),
 		ThumbnailAssetID: o.ThumbnailAssetID,
+		LikeCount:        o.LikeCount,
+		ViewCount:        o.ViewCount,
 		UpdatedAt:        o.UpdatedAt,
 	}
 }
 
-func newOutfitSummaries(outfits []model.Outfit) []outfitSummaryDTO {
+// newOutfitSummaries menyusun ringkasan daftar. liked nil berarti pemanggil
+// anonim, sehingga likedByMe tidak ikut muncul.
+func newOutfitSummaries(outfits []model.Outfit, liked map[string]bool) []outfitSummaryDTO {
 	out := make([]outfitSummaryDTO, 0, len(outfits))
 	for _, o := range outfits {
-		out = append(out, newOutfitSummary(o))
+		summary := newOutfitSummary(o)
+		if liked != nil {
+			byMe := liked[o.OutfitID]
+			summary.LikedByMe = &byMe
+		}
+		out = append(out, summary)
 	}
 	return out
+}
+
+// engagementDTO adalah balasan POST/DELETE like dan POST view.
+type engagementDTO struct {
+	OutfitID string `json:"outfitId"`
+	// changed false berarti permintaan tidak mengubah apa pun — mis. like
+	// kedua dari pemain yang sama. Bukan kegagalan.
+	Changed   bool `json:"changed"`
+	Liked     bool `json:"liked"`
+	LikeCount int  `json:"likeCount"`
+	ViewCount int  `json:"viewCount"`
+}
+
+func newEngagement(e service.Engagement) engagementDTO {
+	return engagementDTO{
+		OutfitID:  e.OutfitID,
+		Changed:   e.Changed,
+		Liked:     e.Liked,
+		LikeCount: e.LikeCount,
+		ViewCount: e.ViewCount,
+	}
 }
 
 // avatarBodyDTO adalah warna dan skala tubuh. Bentuknya sama dengan yang
@@ -161,6 +200,8 @@ type outfitDetailDTO struct {
 	Items            []outfitItemDTO `json:"items"`
 	Body             *avatarBodyDTO  `json:"body"`
 	ThumbnailAssetID int64           `json:"thumbnailAssetId,omitempty"`
+	LikeCount        int             `json:"likeCount"`
+	ViewCount        int             `json:"viewCount"`
 	CreatedAt        time.Time       `json:"createdAt"`
 	UpdatedAt        time.Time       `json:"updatedAt"`
 }
@@ -196,6 +237,8 @@ func newOutfitDetail(o model.Outfit) outfitDetailDTO {
 		Items:            newOutfitItems(o.Items),
 		Body:             newAvatarBody(o.Body),
 		ThumbnailAssetID: o.ThumbnailAssetID,
+		LikeCount:        o.LikeCount,
+		ViewCount:        o.ViewCount,
 		CreatedAt:        o.CreatedAt,
 		UpdatedAt:        o.UpdatedAt,
 	}

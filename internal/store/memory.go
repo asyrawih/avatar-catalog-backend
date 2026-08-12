@@ -1,7 +1,9 @@
 package store
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +22,18 @@ type MemoryOutfits struct {
 	// embeddings hidup terpisah dari rows: embedding bukan bagian bentuk API
 	// outfit, cuma bahan peringkat pencarian.
 	embeddings map[string][]float32
+	// likes meniru tabel OUTFIT_LIKE: satu pemain satu like per outfit.
+	likes map[string]map[int64]time.Time
+	// views meniru tabel OUTFIT_VIEW yang append-only. Disimpan penuh, bukan
+	// cuma dihitung, supaya perilakunya sama dengan Postgres — termasuk saat
+	// dipakai menyiapkan data latih dari mode in-memory.
+	views map[string][]outfitView
+}
+
+// outfitView adalah satu kejadian lihat.
+type outfitView struct {
+	UserID   int64 // 0 = anonim
+	ViewedAt time.Time
 }
 
 // NewMemoryOutfits membuat penyimpanan outfit kosong.
@@ -27,6 +41,8 @@ func NewMemoryOutfits() *MemoryOutfits {
 	return &MemoryOutfits{
 		rows:       make(map[string]model.Outfit),
 		embeddings: make(map[string][]float32),
+		likes:      make(map[string]map[int64]time.Time),
+		views:      make(map[string][]outfitView),
 	}
 }
 
@@ -54,7 +70,7 @@ func (s *MemoryOutfits) Get(_ context.Context, outfitID string) (model.Outfit, e
 }
 
 // List mengembalikan satu halaman outfit hidup yang cocok dengan filter.
-func (s *MemoryOutfits) List(_ context.Context, f OutfitFilter, after *paging.KeysetCursor, limit int) ([]model.Outfit, bool, error) {
+func (s *MemoryOutfits) List(_ context.Context, f OutfitFilter, after *OutfitCursor, limit int) ([]model.Outfit, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -83,14 +99,57 @@ func (s *MemoryOutfits) List(_ context.Context, f OutfitFilter, after *paging.Ke
 		if keyword != "" && !strings.Contains(strings.ToLower(o.Name), keyword) {
 			continue
 		}
-		if after != nil && !after.After(o.UpdatedAt, o.OutfitID) {
+		if !afterCursor(after, f.Sort, o) {
 			continue
 		}
 		matched = append(matched, cloneOutfit(o))
 	}
-	sortByRecency(matched, func(o model.Outfit) (time.Time, string) { return o.UpdatedAt, o.OutfitID })
+	sortOutfits(matched, f.Sort)
 
 	return truncate(matched, limit)
+}
+
+// afterCursor melaporkan apakah outfit berada setelah posisi cursor pada
+// urutan sort. Cursor yang jenisnya tidak cocok dengan sort diabaikan, bukan
+// dipaksakan: memakai kunci yang salah akan membuang baris yang benar.
+func afterCursor(after *OutfitCursor, sort OutfitSort, o model.Outfit) bool {
+	if after == nil {
+		return true
+	}
+	if sort.ByCount() {
+		if after.Count == nil {
+			return true
+		}
+		return after.Count.After(sortCount(o, sort), o.OutfitID)
+	}
+	if after.Recency == nil {
+		return true
+	}
+	return after.Recency.After(o.UpdatedAt, o.OutfitID)
+}
+
+// sortCount mengambil pencacah yang dipakai sort.
+func sortCount(o model.Outfit, sort OutfitSort) int {
+	if sort == SortMostViewed {
+		return o.ViewCount
+	}
+	return o.LikeCount
+}
+
+// sortOutfits mengurutkan menurun sesuai sort, dengan outfitId menaik sebagai
+// pemecah seri — sama persis dengan ORDER BY di Postgres, supaya cursor yang
+// diterbitkan satu implementasi tetap sahih di implementasi lain.
+func sortOutfits(rows []model.Outfit, sort OutfitSort) {
+	if !sort.ByCount() {
+		sortByRecency(rows, func(o model.Outfit) (time.Time, string) { return o.UpdatedAt, o.OutfitID })
+		return
+	}
+	slices.SortFunc(rows, func(a, b model.Outfit) int {
+		if n := cmp.Compare(sortCount(b, sort), sortCount(a, sort)); n != 0 {
+			return n
+		}
+		return cmp.Compare(a.OutfitID, b.OutfitID)
+	})
 }
 
 // ListByReferenceIDs mengembalikan outfit hidup untuk sekumpulan referenceId.
@@ -199,6 +258,92 @@ func (s *MemoryOutfits) SetNameEmbedding(_ context.Context, outfitID string, emb
 	}
 	s.embeddings[outfitID] = append([]float32(nil), embedding...)
 	return nil
+}
+
+// Like mencatat like dan menaikkan like_count. Idempoten.
+func (s *MemoryOutfits) Like(_ context.Context, outfitID string, userID int64, at time.Time) (EngagementCounts, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	o, ok := s.rows[outfitID]
+	if !ok || o.Deleted() {
+		return EngagementCounts{}, ErrNotFound
+	}
+	if _, already := s.likes[outfitID][userID]; already {
+		return s.countsLocked(o), nil
+	}
+
+	if s.likes[outfitID] == nil {
+		s.likes[outfitID] = make(map[int64]time.Time)
+	}
+	s.likes[outfitID][userID] = at
+	o.LikeCount = len(s.likes[outfitID])
+	s.rows[outfitID] = o
+
+	counts := s.countsLocked(o)
+	counts.Changed = true
+	return counts, nil
+}
+
+// Unlike menghapus like dan menurunkan like_count.
+func (s *MemoryOutfits) Unlike(_ context.Context, outfitID string, userID int64) (EngagementCounts, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	o, ok := s.rows[outfitID]
+	if !ok || o.Deleted() {
+		return EngagementCounts{}, ErrNotFound
+	}
+	if _, liked := s.likes[outfitID][userID]; !liked {
+		return s.countsLocked(o), nil
+	}
+
+	delete(s.likes[outfitID], userID)
+	o.LikeCount = len(s.likes[outfitID])
+	s.rows[outfitID] = o
+
+	counts := s.countsLocked(o)
+	counts.Changed = true
+	return counts, nil
+}
+
+// RecordView menambahkan satu kejadian lihat dan menaikkan view_count.
+func (s *MemoryOutfits) RecordView(_ context.Context, outfitID string, userID int64, at time.Time) (EngagementCounts, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	o, ok := s.rows[outfitID]
+	if !ok || o.Deleted() {
+		return EngagementCounts{}, ErrNotFound
+	}
+
+	s.views[outfitID] = append(s.views[outfitID], outfitView{UserID: userID, ViewedAt: at})
+	o.ViewCount = len(s.views[outfitID])
+	s.rows[outfitID] = o
+
+	counts := s.countsLocked(o)
+	counts.Changed = true
+	return counts, nil
+}
+
+// countsLocked membaca popularitas dari baris yang sudah diperbarui. Pemanggil
+// wajib memegang s.mu.
+func (s *MemoryOutfits) countsLocked(o model.Outfit) EngagementCounts {
+	return EngagementCounts{LikeCount: o.LikeCount, ViewCount: o.ViewCount}
+}
+
+// Liked melaporkan outfit mana saja dari outfitIDs yang sudah disukai userID.
+func (s *MemoryOutfits) Liked(_ context.Context, userID int64, outfitIDs []string) (map[string]bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make(map[string]bool, len(outfitIDs))
+	for _, id := range outfitIDs {
+		if _, ok := s.likes[id][userID]; ok {
+			out[id] = true
+		}
+	}
+	return out, nil
 }
 
 // wordSimilarity mendekati word_similarity pg_trgm: kemiripan terbaik antara

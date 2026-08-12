@@ -54,9 +54,14 @@ type Outfit struct {
 	// ThumbnailAssetID adalah asset id thumbnail outfit hasil upload game
 	// server; 0 berarti klien tidak melaporkannya.
 	ThumbnailAssetID int64
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time // soft delete: baris tidak pernah dihapus
+	// LikeCount dan ViewCount adalah ringkasan dari tabel OUTFIT_LIKE dan
+	// OUTFIT_VIEW, disimpan di baris outfit supaya daftar tidak perlu
+	// mengagregasi per baris. Angka yang mengikat tetap isi tabel log itu.
+	LikeCount int
+	ViewCount int
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time // soft delete: baris tidak pernah dihapus
 }
 
 // Deleted melaporkan apakah outfit sudah di-soft-delete.

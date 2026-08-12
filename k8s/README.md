@@ -7,7 +7,7 @@ k8s/
   base/                 manifest inti, dipakai semua lingkungan
     namespace.yaml
     configmap-app.yaml  setelan non-rahasia (sejajar .env.example)
-    secret-app.yaml     password Postgres + AUTH_TOKENS (nilai dev)
+    secret-app.yaml     password Postgres (nilai dev); kunci API TIDAK di sini
     postgres.yaml       StatefulSet pgvector + PVC + Service headless
     redis.yaml          Deployment cache tanpa persistensi + Service
     api.yaml            Deployment + Service
@@ -83,15 +83,24 @@ Jangan dipakai apa adanya. Dua jalan:
   ```bash
   kubectl -n avatar-catalog create secret generic avatar-catalog-secret \
     --from-literal=POSTGRES_PASSWORD='...' \
-    --from-literal=AUTH_TOKENS='token-a,token-b' \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl -n avatar-catalog rollout restart deployment/avatar-catalog-api
   ```
 - **Sealed Secrets / External Secrets Operator** — hapus `secret-app.yaml` dari
   `base/kustomization.yaml` dan tambahkan resource terenkripsi di overlay prod.
 
-`AUTH_TOKENS` kosong berarti autentikasi mati dan semua request diterima —
-isi sebelum API terekspos publik.
+Kunci API tidak ikut Secret ini: kuncinya hidup di tabel `api_key` sebagai
+hash dan diterbitkan dengan `cmd/apikey`, jadi rotasi maupun pencabutan tidak
+butuh redeploy. Setelah pod jalan:
+
+```bash
+kubectl -n avatar-catalog exec -it statefulset/avatar-catalog-db -- \
+  psql -U avatar -d avatar_catalog -c 'SELECT key_id, name FROM api_key'
+```
+
+Untuk menerbitkan kunci, jalankan `cmd/apikey` dari mesin yang bisa menjangkau
+Postgres (mis. lewat `kubectl port-forward svc/avatar-catalog-db 5432:5432`) —
+lihat [docs/auth.md](../docs/auth.md).
 
 Password Postgres disusun jadi `DATABASE_URL` di `api.yaml` lewat ekspansi
 `$(VAR)`, jadi hindari karakter `@ : / ? # &`. Kalau terpaksa dipakai, timpa

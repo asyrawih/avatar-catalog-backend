@@ -46,6 +46,12 @@ func (s *Outfits) queryEmbedding(ctx context.Context, keyword string) []float32 
 	return embedding
 }
 
+// maxConcurrentEmbeds memplafon jumlah embedding yang berjalan bersamaan.
+// Delapan: cukup untuk mengejar laju create normal, dan tetap jauh di bawah
+// DB_MAX_CONNS (bawaan 10) sehingga kerja latar tidak pernah menghabiskan pool
+// koneksi milik request yang sedang ditunggu klien.
+const maxConcurrentEmbeds = 8
+
 // embedNameAsync meng-embed nama outfit di belakang layar lalu menyimpannya.
 // Dipanggil setelah create/rename berhasil; kegagalan hanya di-log — kolomnya
 // nullable persis untuk itu, dan baris yang terlewat bisa disapu ulang nanti
@@ -55,7 +61,35 @@ func (s *Outfits) embedNameAsync(outfitID, name string) {
 		return
 	}
 
+	// Ambil slot tanpa menunggu. Tanpa plafon ini, satu lonjakan create saat
+	// penyedia embedding lambat akan membuat satu goroutine per outfit, masing-
+	// masing memegang koneksi HTTP keluar lalu mengantre di pool Postgres yang
+	// cuma sepuluh — tumpukan itu yang memakan memori, bukan kerjanya sendiri.
+	//
+	// Penuh berarti dilewati, bukan ditunggu: menunggu di sini akan menahan
+	// handler HTTP yang seharusnya sudah selesai. Melewatkannya aman karena
+	// kolomnya nullable dan barisnya bisa disapu ulang nanti lewat
+	// WHERE name_embedding IS NULL — itu memang alasan kolom itu dibuat
+	// nullable.
+	select {
+	case s.embedSlots <- struct{}{}:
+	default:
+		slog.Warn("antrean embedding penuh; nama outfit dilewati",
+			"outfitId", outfitID, "slot", cap(s.embedSlots))
+		return
+	}
+
 	go func() {
+		defer func() {
+			<-s.embedSlots
+			// Goroutine ini di luar jangkauan middleware recoverPanic, jadi
+			// panic di sini akan membunuh seluruh proses. Embedding adalah
+			// peningkatan opsional; tidak layak menjatuhkan server.
+			if p := recover(); p != nil {
+				slog.Error("panic saat meng-embed nama outfit", "outfitId", outfitID, "panic", p)
+			}
+		}()
+
 		ctx, cancel := context.WithTimeout(context.Background(), embedWriteTimeout)
 		defer cancel()
 

@@ -10,6 +10,19 @@ ke cluster lain (GKE/EKS/DOKS).
 
 ---
 
+## Checklist
+
+Urutannya penting — nomor 5 dan 6 sering terlewat, dan gejalanya terlihat
+seperti deploy yang gagal padahal bukan.
+
+- [ ] 1. k3s terpasang, `kubectl get nodes` jalan ([1.1](#11-pasang-k3s))
+- [ ] 2. Image sudah di-push ke registry ([1.4](#14-siapkan-image))
+- [ ] 3. Host di `patch-ingress.yaml` diganti, DNS mengarah ke server ([1.6](#16-domain-dan-tls))
+- [ ] 4. `./k8s/deploy.sh k3s` — semua pod Running ([1.5](#15-deploy))
+- [ ] 5. **Password Postgres diganti SEBELUM pod db pertama kali start** ([1.7](#17-secret-produksi))
+- [ ] 6. **Kunci API diterbitkan** — tanpa ini `/v1` menjawab `401` ([1.8](#18-kunci-api))
+- [ ] 7. Smoke test lulus ([1.9](#19-smoke-test))
+
 ## Ringkasan arsitektur
 
 ```
@@ -193,6 +206,20 @@ Script itu, berurutan: buat namespace → buat ConfigMap `avatar-catalog-db-init
 dari `db/init/*.sql` → `kubectl apply -k` overlay → tunggu rollout db, redis,
 api.
 
+Skema yang ikut terpasang di database kosong:
+
+| Berkas | Isi |
+|---|---|
+| `001_schema.sql` | 13 tabel ERD v3 |
+| `002_seed.sql` | data contoh |
+| `003_cashback.sql` | `cashback_entry`, `redeem_request`, `cashback_event` |
+| `004_engagement.sql` | `outfit_like`, `outfit_view`, kolom `like_count`/`view_count` |
+| `005_api_key.sql` | `api_key` |
+
+Semuanya hanya dijalankan Postgres saat PGDATA masih kosong. Untuk database
+yang sudah berisi, terapkan sendiri — lihat
+[Perubahan skema database](#perubahan-skema-database).
+
 Verifikasi:
 
 ```bash
@@ -203,6 +230,11 @@ curl -s localhost:8080/readyz | jq
 
 `/readyz` mengembalikan status per dependensi, jadi kalau `degraded` isi
 `checks` menunjukkan Postgres atau Redis yang bermasalah.
+
+> **`/v1` masih menjawab `401` di titik ini, dan itu benar.** `AUTH_REQUIRED`
+> bawaannya `true`, sedangkan belum ada satu kunci pun di tabel `api_key`.
+> Lanjut ke [1.8](#18-kunci-api). Yang boleh dipanggil tanpa kunci hanya
+> `/healthz` dan `/readyz`.
 
 ### 1.6 Domain dan TLS
 
@@ -251,7 +283,6 @@ sesudah deploy:
 ```bash
 kubectl -n avatar-catalog create secret generic avatar-catalog-secret \
   --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24 | tr -d '/@:?#&+=')" \
-  --from-literal=AUTH_TOKENS='token-layanan-a,token-layanan-b' \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n avatar-catalog rollout restart deployment/avatar-catalog-api
@@ -267,8 +298,68 @@ Dua hal yang gampang menggigit:
   `DATABASE_URL` lewat ekspansi `$(VAR)` di `k8s/base/api.yaml`, tanpa
   URL-encoding. Perintah `openssl` di atas sudah membuang karakter itu.
 
-`AUTH_TOKENS` kosong = autentikasi mati, semua request diterima. Isi sebelum
-API terekspos publik.
+### 1.8 Kunci API
+
+Kunci konsumen (Roblox, dashboard, AI) **tidak** ada di Secret: kuncinya hidup
+di tabel `api_key` sebagai hash, jadi rotasi dan pencabutan berlaku seketika
+tanpa redeploy. Terbitkan dari mesin yang bisa menjangkau Postgres:
+
+```bash
+kubectl -n avatar-catalog port-forward svc/avatar-catalog-db 5432:5432 &
+
+export DATABASE_URL="postgres://avatar:<password>@localhost:5432/avatar_catalog?sslmode=disable"
+go run ./cmd/apikey issue --name roblox-game-server-prod --role game-server --expires 90d
+go run ./cmd/apikey list
+```
+
+Token utuh hanya muncul sekali. Untuk Roblox, simpan sebagai Secret di Creator
+Hub — panduan lengkapnya di [docs/auth.md](auth.md).
+
+`AUTH_REQUIRED` sudah `"true"` di `k8s/base/configmap-app.yaml`. Jangan diubah
+jadi `"false"` di lingkungan yang bisa dijangkau dari luar; server menolak
+start kalau `false` dipasang bersama `APP_ENV=production`.
+
+Terbitkan minimal satu kunci per konsumen, jangan dipakai bersama — kunci
+bersama tidak bisa dicabut sendiri-sendiri saat salah satunya bocor:
+
+```bash
+go run ./cmd/apikey issue --name roblox-game-server-prod --role game-server --expires 90d
+go run ./cmd/apikey issue --name dashboard-internal     --role dashboard   --expires 365d
+go run ./cmd/apikey issue --name ai-trainer             --role ai          --expires 90d
+```
+
+### 1.9 Smoke test
+
+Enam pemeriksaan ini membuktikan deploy-nya benar-benar hidup, bukan sekadar
+pod-nya Running. Jalankan dari luar cluster memakai domain sungguhan.
+
+```bash
+HOST=https://catalog.kelasmalam.app
+KEY=acb_live_...        # kunci role game-server dari langkah 1.8
+
+st() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+
+echo "1. healthz tanpa kunci       : $(st $HOST/healthz)                       # ingin 200"
+echo "2. readyz  tanpa kunci       : $(st $HOST/readyz)                        # ingin 200"
+echo "3. /v1 tanpa kunci           : $(st $HOST/v1/outfits)                    # ingin 401"
+echo "4. /v1 dengan kunci          : $(st -H "Authorization: Bearer $KEY" $HOST/v1/outfits)   # ingin 200"
+echo "5. TLS sah                   : $(curl -s -o /dev/null -w '%{http_code}' --proto '=https' $HOST/healthz)  # ingin 200"
+echo "6. game-server tolak redeem  : $(st -X PATCH -H "Authorization: Bearer $KEY" \
+       -H 'Content-Type: application/json' -d '{"status":"completed"}' \
+       $HOST/v1/cashback/redeems/req_x)   # ingin 403"
+```
+
+Nomor 3 dan 6 sama pentingnya dengan nomor 4. Nomor 3 membuktikan API tidak
+terbuka tanpa kunci; nomor 6 membuktikan kunci game server tidak bisa
+menyentuh jalur uang keluar. Kalau nomor 6 menjawab `400` alih-alih `403`,
+kunci yang dipakai bukan role `game-server` — periksa dengan `apikey list`.
+
+Setelah itu, pastikan `readyz` melaporkan kedua dependensi sehat:
+
+```bash
+curl -s $HOST/readyz | jq
+# {"status":"ok","checks":{"postgres":"ok","redis":"ok"}}
+```
 
 ---
 
@@ -300,14 +391,26 @@ versi, bukan `latest`; dengan `latest` perintah rollback tidak punya arti.
 ### Perubahan skema database
 
 Skrip `db/init/*.sql` **hanya** dieksekusi saat PGDATA masih kosong — sama
-seperti di docker compose. Untuk database yang sudah berisi:
+seperti di docker compose. Database yang sudah berisi tidak akan ikut berubah
+saat kamu deploy versi baru, dan gejalanya adalah api gagal start atau
+menjawab `500` karena kolom yang dicarinya tidak ada.
+
+Terapkan sendiri, berurutan:
 
 ```bash
-kubectl -n avatar-catalog exec -i statefulset/avatar-catalog-db -- \
-  psql -U avatar -d avatar_catalog < perubahan.sql
+for f in db/init/004_engagement.sql db/init/005_api_key.sql; do
+  kubectl -n avatar-catalog exec -i statefulset/avatar-catalog-db -- \
+    psql -U avatar -d avatar_catalog -v ON_ERROR_STOP=1 < "$f"
+done
 ```
 
-Kalau nanti sering, tambahkan Job migrasi yang jalan sebelum rollout api.
+`004` dan `005` ditulis idempoten (`IF NOT EXISTS`), jadi aman dijalankan
+berulang dan aman dijalankan pada database yang sudah punya sebagian tabelnya.
+`001`–`003` **tidak** — jangan dijalankan ulang pada database berisi.
+
+Urutan yang benar saat merilis versi yang butuh skema baru: terapkan migrasi
+dulu, baru rollout api. Terbalik berarti pod baru berjalan di atas skema lama.
+Kalau nanti sering, tambahkan Job migrasi yang jalan sebelum rollout.
 
 ### Ubah konfigurasi non-rahasia
 
@@ -381,6 +484,10 @@ kubectl -n avatar-catalog port-forward svc/avatar-catalog-db 5432:5432
 | Pod `api` Running tapi tidak Ready | `/readyz` gagal. Port-forward lalu `curl localhost:8080/readyz` — isi `checks` menunjuk Postgres atau Redis |
 | **ImagePullBackOff** | Tag belum ada di registry, atau pull secret belum terpasang (lihat 1.4) |
 | Ingress 404 | `ingressClassName` tidak cocok dengan controller yang jalan. `kubectl get ingressclass`, lalu lihat 1.3 |
+| Semua `/v1` **401** | Belum ada kunci API, atau kunci yang dipakai salah/dicabut. `apikey list`; terbitkan dengan 1.8. Ini juga jawaban yang benar untuk request tanpa `Authorization` |
+| **403** `insufficient_scope` | Kunci sah tapi role-nya tidak punya izin itu — mis. kunci `ai` mencoba menulis. Lihat role di `apikey roles` |
+| **403** `actor_assert_forbidden` | Kunci tanpa `actor:assert` mengirim `X-User-Id`. Hanya kunci `game-server` yang boleh bertindak atas nama pemain |
+| Pod `api` **CrashLoopBackOff** setelah upgrade | Skema belum dimigrasi. Terapkan `004`/`005` lalu rollout ulang |
 | Sertifikat tidak terbit | `kubectl -n avatar-catalog describe certificate`. Umumnya DNS belum mengarah, atau port 80 tertutup sehingga HTTP-01 gagal |
 | HPA `<unknown>/70%` | metrics-server belum siap. `kubectl -n kube-system get deploy metrics-server` |
 | Data hilang setelah redeploy | PVC ikut terhapus. `kubectl delete -k` **tidak** menghapus PVC dari `volumeClaimTemplates`, tapi `kubectl delete pvc` iya. Cek dulu sebelum menghapus apa pun |

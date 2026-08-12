@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hanan/avatar-catalog-backend/internal/auth"
 	"github.com/hanan/avatar-catalog-backend/internal/model"
 	"github.com/hanan/avatar-catalog-backend/internal/paging"
 	"github.com/hanan/avatar-catalog-backend/internal/store"
@@ -51,7 +52,8 @@ func resetSchema(t *testing.T, pool *pgxpool.Pool) {
 	ctx := context.Background()
 
 	_, err := pool.Exec(ctx, `
-		TRUNCATE transaction_item, transaction, outfit_item, outfit, body_template, player
+		TRUNCATE api_key, outfit_like, outfit_view,
+		         transaction_item, transaction, outfit_item, outfit, body_template, player
 		RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate error = %v", err)
@@ -254,7 +256,7 @@ func TestOutfitListBerhalamanDenganKeyset(t *testing.T) {
 		t.Fatalf("halaman pertama = %+v (hasMore=%v), ingin outfit terbaru", first, hasMore)
 	}
 
-	cursor := paging.KeysetCursor{At: first[0].UpdatedAt, ID: first[0].OutfitID}
+	cursor := store.OutfitCursor{Recency: &paging.KeysetCursor{At: first[0].UpdatedAt, ID: first[0].OutfitID}}
 	second, hasMore, err := outfits.List(ctx, store.OutfitFilter{UserID: newer.UserID}, &cursor, 1)
 	if err != nil {
 		t.Fatalf("ListByUser() halaman kedua error = %v", err)
@@ -616,5 +618,396 @@ func TestSpendStatsMenghitungBundleSekali(t *testing.T) {
 	}
 	if got := rows[0].RobuxTotal(); got != 55+445+250 {
 		t.Errorf("RobuxTotal() dari baris tersimpan = %d, ingin %d", got, 55+445+250)
+	}
+}
+
+// Keunikan like ditegakkan kunci primer OUTFIT_LIKE, bukan pemeriksaan di
+// aplikasi — test ini yang membuktikannya sampai ke database.
+func TestOutfitLikeIdempotenDanMenaikkanCounter(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	outfit := sampleOutfit("otf_like01", "550e8400-e29b-41d4-a716-446655440000", time.Now().UTC().Truncate(time.Microsecond))
+	if err := outfits.Create(ctx, outfit); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	counts, err := outfits.Like(ctx, outfit.OutfitID, 111, now)
+	if err != nil {
+		t.Fatalf("Like() error = %v", err)
+	}
+	if !counts.Changed || counts.LikeCount != 1 {
+		t.Fatalf("like pertama = %+v, ingin changed=true likeCount=1", counts)
+	}
+
+	// Like berulang tetap melaporkan angka yang benar, bukan nol.
+	if counts, err = outfits.Like(ctx, outfit.OutfitID, 111, now); err != nil {
+		t.Fatalf("Like() kedua error = %v", err)
+	}
+	if counts.Changed || counts.LikeCount != 1 {
+		t.Errorf("like berulang = %+v, ingin changed=false likeCount=1", counts)
+	}
+
+	got, err := outfits.Get(ctx, outfit.OutfitID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.LikeCount != 1 {
+		t.Errorf("likeCount = %d, ingin 1", got.LikeCount)
+	}
+
+	// Unlike mengembalikan counter ke nol, dan unlike kedua tidak membuatnya
+	// negatif.
+	if _, err := outfits.Unlike(ctx, outfit.OutfitID, 111); err != nil {
+		t.Fatalf("Unlike() error = %v", err)
+	}
+	if counts, err = outfits.Unlike(ctx, outfit.OutfitID, 111); err != nil {
+		t.Fatalf("Unlike() kedua error = %v", err)
+	}
+	if counts.Changed || counts.LikeCount != 0 {
+		t.Errorf("unlike berulang = %+v, ingin changed=false likeCount=0", counts)
+	}
+	if got, err = outfits.Get(ctx, outfit.OutfitID); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.LikeCount != 0 {
+		t.Errorf("likeCount setelah unlike = %d, ingin 0", got.LikeCount)
+	}
+}
+
+// View bersifat append-only: pemain yang sama membuka outfit tiga kali memang
+// tiga baris, bukan satu.
+func TestOutfitViewSelaluMenambahBaris(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	outfit := sampleOutfit("otf_view01", "550e8400-e29b-41d4-a716-446655440000", time.Now().UTC().Truncate(time.Microsecond))
+	if err := outfits.Create(ctx, outfit); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		counts, err := outfits.RecordView(ctx, outfit.OutfitID, 111, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("RecordView() ke-%d error = %v", i+1, err)
+		}
+		// Angka balasan datang dari UPDATE ... RETURNING, jadi harus naik tiap
+		// panggilan tanpa pembacaan terpisah.
+		if counts.ViewCount != i+1 {
+			t.Errorf("viewCount pada panggilan ke-%d = %d, ingin %d", i+1, counts.ViewCount, i+1)
+		}
+	}
+	// Penonton anonim tetap tercatat, dengan user_id NULL.
+	if _, err := outfits.RecordView(ctx, outfit.OutfitID, 0, time.Now().UTC()); err != nil {
+		t.Fatalf("RecordView() anonim error = %v", err)
+	}
+
+	got, err := outfits.Get(ctx, outfit.OutfitID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.ViewCount != 4 {
+		t.Errorf("viewCount = %d, ingin 4", got.ViewCount)
+	}
+
+	var rows, anon int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE user_id IS NULL) FROM outfit_view WHERE outfit_id = $1`,
+		outfit.OutfitID).Scan(&rows, &anon); err != nil {
+		t.Fatalf("hitung outfit_view error = %v", err)
+	}
+	if rows != 4 || anon != 1 {
+		t.Errorf("outfit_view = %d baris (%d anonim), ingin 4 dan 1", rows, anon)
+	}
+}
+
+func TestOutfitListMostLikedBerhalamanDenganKeyset(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	populer := sampleOutfit("otf_pop001", "550e8400-e29b-41d4-a716-446655440000", base)
+	sepi := sampleOutfit("otf_pop002", "6ba7b810-9dad-11d1-80b4-00c04fd430c8", base.Add(time.Minute))
+	for _, o := range []model.Outfit{populer, sepi} {
+		if err := outfits.Create(ctx, o); err != nil {
+			t.Fatalf("Create(%s) error = %v", o.OutfitID, err)
+		}
+	}
+
+	// sepi lebih baru, jadi urutan terbaru menaruhnya di atas. Dua like membuat
+	// populer memimpin urutan mostLiked — kalau sort tidak benar-benar dipakai,
+	// test ini gagal alih-alih lolos karena kebetulan.
+	for _, userID := range []int64{111, 222} {
+		if _, err := outfits.Like(ctx, populer.OutfitID, userID, time.Now().UTC()); err != nil {
+			t.Fatalf("Like() error = %v", err)
+		}
+	}
+
+	filter := store.OutfitFilter{Sort: store.SortMostLiked}
+	first, hasMore, err := outfits.List(ctx, filter, nil, 1)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if !hasMore || len(first) != 1 || first[0].OutfitID != populer.OutfitID {
+		t.Fatalf("halaman pertama = %+v (hasMore=%v), ingin outfit terpopuler", first, hasMore)
+	}
+	if first[0].LikeCount != 2 {
+		t.Errorf("likeCount = %d, ingin 2", first[0].LikeCount)
+	}
+
+	cursor := store.OutfitCursor{Count: &paging.CountCursor{Count: first[0].LikeCount, ID: first[0].OutfitID}}
+	second, hasMore, err := outfits.List(ctx, filter, &cursor, 1)
+	if err != nil {
+		t.Fatalf("List() halaman kedua error = %v", err)
+	}
+	if hasMore {
+		t.Error("hasMore = true padahal hanya ada dua baris")
+	}
+	if len(second) != 1 || second[0].OutfitID != sepi.OutfitID {
+		t.Fatalf("halaman kedua = %+v, ingin %s", second, sepi.OutfitID)
+	}
+}
+
+func TestOutfitLikedMenandaiHanyaMilikPemain(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	disukai := sampleOutfit("otf_lkd001", "550e8400-e29b-41d4-a716-446655440000", base)
+	tidak := sampleOutfit("otf_lkd002", "6ba7b810-9dad-11d1-80b4-00c04fd430c8", base)
+	for _, o := range []model.Outfit{disukai, tidak} {
+		if err := outfits.Create(ctx, o); err != nil {
+			t.Fatalf("Create(%s) error = %v", o.OutfitID, err)
+		}
+	}
+	if _, err := outfits.Like(ctx, disukai.OutfitID, 111, time.Now().UTC()); err != nil {
+		t.Fatalf("Like() error = %v", err)
+	}
+
+	liked, err := outfits.Liked(ctx, 111, []string{disukai.OutfitID, tidak.OutfitID})
+	if err != nil {
+		t.Fatalf("Liked() error = %v", err)
+	}
+	if !liked[disukai.OutfitID] || liked[tidak.OutfitID] {
+		t.Errorf("liked = %v, ingin hanya %s", liked, disukai.OutfitID)
+	}
+
+	// Pemain lain tidak ikut kebagian penanda milik orang.
+	other, err := outfits.Liked(ctx, 222, []string{disukai.OutfitID})
+	if err != nil {
+		t.Fatalf("Liked() pemain lain error = %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("liked pemain lain = %v, ingin kosong", other)
+	}
+}
+
+// Like pada outfit yang sudah di-soft-delete ditolak: barisnya masih ada demi
+// referenceId yang beredar, tapi tidak boleh menerima interaksi baru.
+func TestOutfitLikeMenolakYangTerhapus(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+
+	outfit := sampleOutfit("otf_del001", "550e8400-e29b-41d4-a716-446655440000", time.Now().UTC().Truncate(time.Microsecond))
+	if err := outfits.Create(ctx, outfit); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	deletedAt := time.Now().UTC()
+	if _, err := outfits.Update(ctx, outfit.OutfitID, func(o *model.Outfit) error {
+		o.DeletedAt = &deletedAt
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	if _, err := outfits.Like(ctx, outfit.OutfitID, 111, time.Now().UTC()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Like() pada outfit terhapus error = %v, ingin ErrNotFound", err)
+	}
+	if _, err := outfits.RecordView(ctx, outfit.OutfitID, 111, time.Now().UTC()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("RecordView() pada outfit terhapus error = %v, ingin ErrNotFound", err)
+	}
+}
+
+// --- kunci API -------------------------------------------------------------
+
+func newAPIKey(t *testing.T, name string, expiresAt *time.Time) (auth.Key, string) {
+	t.Helper()
+
+	token, err := auth.Generate(auth.EnvTest)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	return auth.Key{
+		KeyID:     token.KeyID,
+		Hash:      token.Hash,
+		Name:      name,
+		Scopes:    auth.Roles["game-server"],
+		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		ExpiresAt: expiresAt,
+	}, token.Secret
+}
+
+func TestAPIKeyTulisLaluBaca(t *testing.T) {
+	pool := newPool(t)
+	keys := postgres.NewAPIKeys(pool)
+	ctx := context.Background()
+
+	nanti := time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Microsecond)
+	want, secret := newAPIKey(t, "roblox-game-server", &nanti)
+	if err := keys.Create(ctx, want); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	got, err := keys.ByKeyID(ctx, want.KeyID)
+	if err != nil {
+		t.Fatalf("ByKeyID() error = %v", err)
+	}
+	if got.Name != want.Name {
+		t.Errorf("name = %q, ingin %q", got.Name, want.Name)
+	}
+	if !auth.Equal(got.Hash, auth.HashToken(secret)) {
+		t.Error("hash tersimpan tidak cocok dengan token aslinya")
+	}
+	if len(got.Scopes) != len(want.Scopes) {
+		t.Errorf("scopes = %v, ingin %v", got.Scopes, want.Scopes)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(nanti) {
+		t.Errorf("expiresAt = %v, ingin %v", got.ExpiresAt, nanti)
+	}
+	if !got.Usable(time.Now().UTC()) {
+		t.Error("kunci baru tidak bisa dipakai")
+	}
+
+	// Yang tersimpan hanya hash: token utuhnya tidak boleh ada di baris mana pun.
+	var found int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM api_key WHERE encode(token_hash, 'escape') LIKE '%' || $1 || '%'`,
+		secret).Scan(&found); err != nil {
+		t.Fatalf("hitung error = %v", err)
+	}
+	if found != 0 {
+		t.Error("token asli ikut tersimpan di database")
+	}
+}
+
+func TestAPIKeyTidakAda(t *testing.T) {
+	pool := newPool(t)
+	keys := postgres.NewAPIKeys(pool)
+
+	if _, err := keys.ByKeyID(context.Background(), "tidakada"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("ByKeyID() error = %v, ingin ErrNotFound", err)
+	}
+}
+
+// Kolom last_used_at pernah diam-diam tidak pernah terisi karena parameternya
+// tidak di-cast, dan kegagalannya cuma di-log. Test ini yang menahannya.
+func TestAPIKeyTouchLastUsedBenarBenarMenulis(t *testing.T) {
+	pool := newPool(t)
+	keys := postgres.NewAPIKeys(pool)
+	ctx := context.Background()
+
+	key, _ := newAPIKey(t, "dipakai", nil)
+	if err := keys.Create(ctx, key); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := keys.TouchLastUsed(ctx, key.KeyID, now); err != nil {
+		t.Fatalf("TouchLastUsed() error = %v", err)
+	}
+
+	got, err := keys.ByKeyID(ctx, key.KeyID)
+	if err != nil {
+		t.Fatalf("ByKeyID() error = %v", err)
+	}
+	if got.LastUsedAt == nil {
+		t.Fatal("lastUsedAt masih kosong setelah TouchLastUsed()")
+	}
+
+	// Pemakaian berikutnya dalam satu menit tidak menulis ulang: tanpa ambang
+	// ini, tiap request jadi satu UPDATE ke baris yang sama.
+	first := *got.LastUsedAt
+	if err := keys.TouchLastUsed(ctx, key.KeyID, now.Add(30*time.Second)); err != nil {
+		t.Fatalf("TouchLastUsed() kedua error = %v", err)
+	}
+	if got, err = keys.ByKeyID(ctx, key.KeyID); err != nil {
+		t.Fatalf("ByKeyID() error = %v", err)
+	}
+	if !got.LastUsedAt.Equal(first) {
+		t.Errorf("lastUsedAt ditulis ulang dalam satu menit: %v -> %v", first, *got.LastUsedAt)
+	}
+
+	// Lewat satu menit, barulah diperbarui.
+	if err := keys.TouchLastUsed(ctx, key.KeyID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("TouchLastUsed() ketiga error = %v", err)
+	}
+	if got, err = keys.ByKeyID(ctx, key.KeyID); err != nil {
+		t.Fatalf("ByKeyID() error = %v", err)
+	}
+	if got.LastUsedAt.Equal(first) {
+		t.Error("lastUsedAt tidak diperbarui setelah lewat satu menit")
+	}
+}
+
+func TestAPIKeyRevokeIdempotenDanMempertahankanWaktuPertama(t *testing.T) {
+	pool := newPool(t)
+	keys := postgres.NewAPIKeys(pool)
+	ctx := context.Background()
+
+	key, _ := newAPIKey(t, "dicabut", nil)
+	if err := keys.Create(ctx, key); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	first := time.Now().UTC().Truncate(time.Microsecond)
+	if err := keys.Revoke(ctx, key.KeyID, first); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+	if err := keys.Revoke(ctx, key.KeyID, first.Add(time.Hour)); err != nil {
+		t.Fatalf("Revoke() kedua error = %v", err)
+	}
+
+	got, err := keys.ByKeyID(ctx, key.KeyID)
+	if err != nil {
+		t.Fatalf("ByKeyID() error = %v", err)
+	}
+	if got.RevokedAt == nil || !got.RevokedAt.Equal(first) {
+		t.Errorf("revokedAt = %v, ingin tetap %v (pencabutan pertama)", got.RevokedAt, first)
+	}
+	if got.Usable(time.Now().UTC()) {
+		t.Error("kunci yang dicabut masih bisa dipakai")
+	}
+
+	if err := keys.Revoke(ctx, "tidakada", first); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Revoke() kunci tidak ada error = %v, ingin ErrNotFound", err)
+	}
+}
+
+func TestAPIKeyListTerbaruDulu(t *testing.T) {
+	pool := newPool(t)
+	keys := postgres.NewAPIKeys(pool)
+	ctx := context.Background()
+
+	lama, _ := newAPIKey(t, "lama", nil)
+	lama.CreatedAt = time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	baru, _ := newAPIKey(t, "baru", nil)
+	for _, key := range []auth.Key{lama, baru} {
+		if err := keys.Create(ctx, key); err != nil {
+			t.Fatalf("Create(%s) error = %v", key.Name, err)
+		}
+	}
+
+	rows, err := keys.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(rows) != 2 || rows[0].Name != "baru" {
+		t.Fatalf("List() = %v, ingin terbaru dulu", rows)
 	}
 }

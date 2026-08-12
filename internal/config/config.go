@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -39,9 +38,20 @@ type Config struct {
 	// IdempotencyTTL adalah umur simpan hasil POST per Idempotency-Key.
 	IdempotencyTTL time.Duration
 
-	// AuthTokens adalah daftar Bearer token layanan yang diterima. Kosong
-	// berarti autentikasi belum diaktifkan.
-	AuthTokens []string
+	// RateLimitPerSecond membatasi request per kunci API per detik. 0 atau
+	// kurang mematikan pembatas.
+	//
+	// Batasnya PER PROSES, bukan per cluster: tiap replika punya hitungannya
+	// sendiri, jadi batas efektifnya adalah nilai ini dikali jumlah replika.
+	// Bagi dulu kalau yang dimaksud adalah batas gabungan.
+	RateLimitPerSecond int
+
+	// AuthRequired mewajibkan setiap request /v1 membawa kunci API yang sah.
+	//
+	// Bawaannya true: server yang lupa dikonfigurasi harus gagal tertutup, bukan
+	// terbuka. Hanya boleh dimatikan untuk pengembangan lokal, dan cmd/server
+	// menolak start kalau dimatikan saat APP_ENV=production.
+	AuthRequired bool
 }
 
 // Load membaca environment dan menerapkan nilai bawaan.
@@ -59,6 +69,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	seed, err := envBool("SEED_DATA", true)
+	if err != nil {
+		return Config{}, err
+	}
+	authRequired, err := envBool("AUTH_REQUIRED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	rateLimit, err := envInt("RATE_LIMIT_PER_SECOND", 50)
 	if err != nil {
 		return Config{}, err
 	}
@@ -97,7 +115,9 @@ func Load() (Config, error) {
 
 		SeedData:       seed,
 		IdempotencyTTL: idempotencyTTL,
-		AuthTokens:     envList("AUTH_TOKENS"),
+
+		AuthRequired:       authRequired,
+		RateLimitPerSecond: rateLimit,
 	}
 
 	if cfg.Port < 1 || cfg.Port > 65535 {
@@ -116,22 +136,6 @@ func envString(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func envList(key string) []string {
-	raw := os.Getenv(key)
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part = strings.TrimSpace(part); part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func envInt(key string, fallback int) (int, error) {

@@ -6,7 +6,9 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/hanan/avatar-catalog-backend/internal/auth"
 	"github.com/hanan/avatar-catalog-backend/internal/model"
 	"github.com/hanan/avatar-catalog-backend/internal/paging"
 )
@@ -32,6 +34,54 @@ type OutfitFilter struct {
 	// Keyword mencocokkan sebagian nama outfit tanpa peduli huruf besar-kecil;
 	// kosong = tanpa pencarian.
 	Keyword string
+	// Sort menentukan urutan daftar. Zero value = terbaru dulu, urutan yang
+	// berlaku sejak awal.
+	Sort OutfitSort
+}
+
+// OutfitSort adalah urutan daftar outfit.
+type OutfitSort string
+
+// Nilai OutfitSort yang valid.
+const (
+	// SortRecent mengurutkan dari yang paling baru diperbarui.
+	SortRecent OutfitSort = ""
+	// SortMostLiked mengurutkan dari yang paling banyak disukai.
+	SortMostLiked OutfitSort = "mostLiked"
+	// SortMostViewed mengurutkan dari yang paling banyak dilihat.
+	SortMostViewed OutfitSort = "mostViewed"
+)
+
+// ByCount melaporkan apakah urutan ini memakai pencacah, bukan waktu — yang
+// menentukan jenis cursor mana yang dipakai.
+func (s OutfitSort) ByCount() bool { return s == SortMostLiked || s == SortMostViewed }
+
+// OutfitCursor menandai posisi halaman daftar outfit.
+//
+// Kuncinya ikut urutan yang diminta: urutan terbaru memakai (updatedAt,
+// outfitId), urutan populer memakai (count, outfitId). Keduanya dibungkus satu
+// tipe supaya List punya satu parameter cursor, dan tepat satu field yang
+// terisi — pengisi cursor yang tidak cocok dengan Sort akan menyaring baris
+// yang salah tanpa error yang kelihatan.
+type OutfitCursor struct {
+	Recency *paging.KeysetCursor
+	Count   *paging.CountCursor
+}
+
+// EngagementCounts adalah keadaan popularitas outfit sesudah sebuah penulisan
+// like atau view.
+//
+// Angkanya dibaca di dalam transaksi penulisan itu sendiri, bukan dihitung
+// pemanggil dari pembacaan sebelumnya. Bedanya nyata saat cache baca aktif:
+// pembacaan sebelumnya bisa dilayani entri lama, sehingga "nilai lama + 1"
+// menghasilkan angka yang salah pada balasan aksi yang baru saja dilakukan
+// klien.
+type EngagementCounts struct {
+	// Changed melaporkan apakah penulisan ini benar-benar mengubah sesuatu.
+	// false pada like berulang dari pemain yang sama.
+	Changed   bool
+	LikeCount int
+	ViewCount int
 }
 
 // Outfits menyimpan OUTFIT dan OUTFIT_ITEM.
@@ -41,8 +91,9 @@ type Outfits interface {
 	// Get mengembalikan outfit termasuk yang sudah di-soft-delete; pemanggil
 	// yang menentukan apakah itu 404 atau 410.
 	Get(ctx context.Context, outfitID string) (model.Outfit, error)
-	// List mengembalikan outfit hidup yang cocok dengan filter, terbaru dulu.
-	List(ctx context.Context, f OutfitFilter, after *paging.KeysetCursor, limit int) ([]model.Outfit, bool, error)
+	// List mengembalikan outfit hidup yang cocok dengan filter, dalam urutan
+	// f.Sort. Cursor nil berarti halaman pertama.
+	List(ctx context.Context, f OutfitFilter, after *OutfitCursor, limit int) ([]model.Outfit, bool, error)
 	// ListByReferenceIDs mengembalikan outfit hidup untuk sekumpulan referenceId.
 	ListByReferenceIDs(ctx context.Context, referenceIDs []string) ([]model.Outfit, error)
 	// Update menerapkan fn pada outfit yang tersimpan lalu menyimpan hasilnya.
@@ -57,6 +108,44 @@ type Outfits interface {
 	// asinkron setelah create/rename; kegagalannya tidak menggagalkan
 	// penulisan outfit itu sendiri.
 	SetNameEmbedding(ctx context.Context, outfitID string, embedding []float32) error
+
+	// Like mencatat bahwa userID menyukai outfit dan menaikkan like_count.
+	// Idempoten: like kedua dari pemain yang sama tidak mengubah apa pun,
+	// karena yang menegakkan keunikan adalah kunci primer tabel, bukan
+	// pemeriksaan di aplikasi yang bisa kalah balapan.
+	Like(ctx context.Context, outfitID string, userID int64, at time.Time) (EngagementCounts, error)
+	// Unlike menghapus like dan menurunkan like_count. Changed false bila
+	// pemain memang belum pernah menyukainya.
+	Unlike(ctx context.Context, outfitID string, userID int64) (EngagementCounts, error)
+	// RecordView menambahkan satu baris kejadian lihat dan menaikkan
+	// view_count. Selalu menulis baris baru: berapa kali sebuah outfit dilihat
+	// sebelum disukai adalah bagian dari sinyal yang mau disimpan. userID 0
+	// berarti penonton anonim.
+	RecordView(ctx context.Context, outfitID string, userID int64, at time.Time) (EngagementCounts, error)
+	// Liked melaporkan outfit mana saja dari outfitIDs yang sudah disukai
+	// userID. Dipakai daftar untuk mengisi penanda "sudah kamu suka" tanpa
+	// satu query per baris.
+	Liked(ctx context.Context, userID int64, outfitIDs []string) (map[string]bool, error)
+}
+
+// APIKeys menyimpan API_KEY — kunci milik konsumen backend.
+type APIKeys interface {
+	// ByKeyID mengembalikan kunci beserta hash-nya, termasuk yang sudah
+	// dicabut atau kedaluwarsa: pemanggil yang memutuskan, supaya alasan
+	// penolakan bisa dicatat tanpa membocorkannya ke klien.
+	ByKeyID(ctx context.Context, keyID string) (auth.Key, error)
+	// Create menyimpan kunci baru.
+	Create(ctx context.Context, key auth.Key) error
+	// List mengembalikan seluruh kunci, terbaru dulu. Untuk peninjauan, bukan
+	// jalur request.
+	List(ctx context.Context) ([]auth.Key, error)
+	// Revoke menandai kunci dicabut. Idempoten: mencabut kunci yang sudah
+	// dicabut bukan error, karena hasil akhirnya sama.
+	Revoke(ctx context.Context, keyID string, at time.Time) error
+	// TouchLastUsed mencatat pemakaian terakhir. Kegagalannya tidak boleh
+	// menggagalkan request — ini catatan operasional, bukan bagian keputusan
+	// autentikasi.
+	TouchLastUsed(ctx context.Context, keyID string, at time.Time) error
 }
 
 // Transactions menyimpan TRANSACTION dan TRANSACTION_ITEM.

@@ -167,13 +167,60 @@ func (h *outfitHandler) list(w http.ResponseWriter, r *http.Request) {
 		IsPublic:  isPublic,
 		OutfitIDs: queryList(r, "outfitId"),
 		Keyword:   r.URL.Query().Get("q"),
+		Sort:      r.URL.Query().Get("sort"),
 	}
 	page, err := h.outfits.List(r.Context(), filter, r.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newListEnvelope(newOutfitSummaries(page.Outfits), page.NextCursor, page.HasMore))
+
+	// Satu query untuk seluruh halaman, bukan satu per baris.
+	liked, err := h.outfits.LikedBy(r.Context(), actorFrom(r.Context()), page.Outfits)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newListEnvelope(newOutfitSummaries(page.Outfits, liked), page.NextCursor, page.HasMore))
+}
+
+// like menangani POST /v1/outfits/{outfitId}/likes.
+//
+// Idempoten: menekan tombol suka dua kali berakhir pada keadaan yang sama dan
+// tetap 200, dengan changed:false sebagai penanda bahwa yang kedua tidak
+// mengubah apa pun.
+func (h *outfitHandler) like(w http.ResponseWriter, r *http.Request) {
+	result, err := h.outfits.Like(r.Context(), actorFrom(r.Context()), r.PathValue("outfitId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newEngagement(result))
+}
+
+// unlike menangani DELETE /v1/outfits/{outfitId}/likes.
+func (h *outfitHandler) unlike(w http.ResponseWriter, r *http.Request) {
+	result, err := h.outfits.Unlike(r.Context(), actorFrom(r.Context()), r.PathValue("outfitId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newEngagement(result))
+}
+
+// recordView menangani POST /v1/outfits/{outfitId}/views.
+//
+// Sengaja endpoint sendiri, bukan efek samping GET detail: GET tetap murni
+// baca sehingga aman di-cache dan diulang, dan klien yang menentukan kapan
+// sebuah outfit benar-benar terlihat — bukan setiap crawler yang kebetulan
+// mengambilnya.
+func (h *outfitHandler) recordView(w http.ResponseWriter, r *http.Request) {
+	result, err := h.outfits.RecordView(r.Context(), actorFrom(r.Context()), r.PathValue("outfitId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newEngagement(result))
 }
 
 // search menangani GET /v1/outfits/search.
@@ -208,7 +255,12 @@ func (h *outfitHandler) search(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newListEnvelope(newOutfitSummaries(rows), "", false))
+	liked, err := h.outfits.LikedBy(r.Context(), actorFrom(r.Context()), rows)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newListEnvelope(newOutfitSummaries(rows, liked), "", false))
 }
 
 // get menangani GET /v1/outfits/{outfitId}.
@@ -351,8 +403,14 @@ func (h *outfitHandler) resolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	liked, err := h.outfits.LikedBy(r.Context(), actorFrom(r.Context()), page.Found)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, resolveEnvelope{
-		listEnvelope: newListEnvelope(newOutfitSummaries(page.Found), page.NextCursor, page.HasMore),
+		listEnvelope: newListEnvelope(newOutfitSummaries(page.Found, liked), page.NextCursor, page.HasMore),
 		Total:        page.Total,
 		TotalPages:   page.TotalPages,
 		NotFound:     page.NotFound,

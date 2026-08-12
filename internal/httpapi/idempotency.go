@@ -41,7 +41,7 @@ func idempotent(store idempotency.Store, scope string, required bool) func(http.
 			rec := &captureWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 
-			if rec.status >= 200 && rec.status < 300 {
+			if rec.replayable() {
 				store.Put(scope, key, idempotency.Record{Status: rec.status, Body: rec.body.Bytes()})
 			}
 		})
@@ -66,12 +66,29 @@ func writeReplay(w http.ResponseWriter, rec idempotency.Record) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
+// maxCapturedBody membatasi besar respons yang direkam untuk diputar ulang.
+//
+// maxBodyBytes membatasi body MASUK, bukan keluar — tanpa batas tersendiri di
+// sini, satu respons besar akan disimpan utuh di penyimpan idempotensi dan
+// bertahan selama TTL. Endpoint yang tercakup sekarang membalas satu objek
+// outfit, jauh di bawah batas ini; batasnya ada supaya endpoint yang dibungkus
+// belakangan — misalnya yang membalas satu halaman penuh — tidak diam-diam
+// membuat penyimpanan itu membengkak.
+const maxCapturedBody = 64 << 10 // 64 KiB
+
 // captureWriter merekam status dan body supaya bisa disimpan sebagai hasil
 // idempoten, sambil tetap meneruskannya ke klien.
 type captureWriter struct {
 	http.ResponseWriter
 	status int
 	body   bytes.Buffer
+	// tooLarge menandai respons yang melewati maxCapturedBody. Rekaman
+	// setengah jadi tidak boleh disimpan: memutarnya kembali akan mengirim
+	// JSON terpotong yang gagal di-parse klien, dan itu lebih buruk daripada
+	// tidak menyimpan sama sekali — retry-nya masih ditangkap kunci unik di
+	// database untuk endpoint yang punya, atau sekadar membuat baris kedua
+	// untuk yang tidak.
+	tooLarge bool
 }
 
 func (c *captureWriter) WriteHeader(status int) {
@@ -80,6 +97,18 @@ func (c *captureWriter) WriteHeader(status int) {
 }
 
 func (c *captureWriter) Write(b []byte) (int, error) {
-	c.body.Write(b)
+	if !c.tooLarge {
+		if c.body.Len()+len(b) > maxCapturedBody {
+			c.tooLarge = true
+			c.body.Reset() // lepaskan yang sudah terekam; tidak akan dipakai
+		} else {
+			c.body.Write(b)
+		}
+	}
 	return c.ResponseWriter.Write(b)
+}
+
+// replayable melaporkan apakah respons ini layak disimpan untuk diputar ulang.
+func (c *captureWriter) replayable() bool {
+	return !c.tooLarge && c.status >= 200 && c.status < 300
 }

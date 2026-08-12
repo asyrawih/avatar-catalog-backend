@@ -10,7 +10,6 @@ import (
 
 	"github.com/hanan/avatar-catalog-backend/internal/cache"
 	"github.com/hanan/avatar-catalog-backend/internal/model"
-	"github.com/hanan/avatar-catalog-backend/internal/paging"
 	"github.com/hanan/avatar-catalog-backend/internal/store"
 )
 
@@ -79,10 +78,14 @@ type outfitPage struct {
 
 // List mengembalikan daftar outfit, lewat cache bila tersedia. Semua varian
 // daftar dijaga versi global yang sama.
-func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.KeysetCursor, limit int) ([]model.Outfit, bool, error) {
+func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *store.OutfitCursor, limit int) ([]model.Outfit, bool, error) {
 	cursorKey := "first"
-	if after != nil {
-		cursorKey = cache.HashString(after.At.UTC().Format(time.RFC3339Nano) + "|" + after.ID)
+	switch {
+	case after == nil:
+	case after.Recency != nil:
+		cursorKey = cache.HashString(after.Recency.At.UTC().Format(time.RFC3339Nano) + "|" + after.Recency.ID)
+	case after.Count != nil:
+		cursorKey = cache.HashString(strconv.Itoa(after.Count.Count) + "|" + after.Count.ID)
 	}
 
 	publicKey := "all"
@@ -99,8 +102,15 @@ func (s *Outfits) List(ctx context.Context, f store.OutfitFilter, after *paging.
 		sort.Strings(ids)
 		searchKey = cache.HashString(f.Keyword + "|" + strings.Join(ids, ","))
 	}
+	// Urutan wajib masuk kunci: halaman pertama "terbaru" dan halaman pertama
+	// "terpopuler" punya seluruh parameter lain yang sama persis, jadi tanpa
+	// pembeda ini yang satu akan disajikan sebagai yang lain.
+	sortKey := string(f.Sort)
+	if sortKey == "" {
+		sortKey = "recent"
+	}
 	key := s.versionedKey(ctx, "list", strconv.FormatInt(f.UserID, 10),
-		publicKey, searchKey, cursorKey, strconv.Itoa(limit))
+		publicKey, searchKey, sortKey, cursorKey, strconv.Itoa(limit))
 
 	var page outfitPage
 	found, err := s.cache.Get(ctx, key, &page)
@@ -164,6 +174,44 @@ func (s *Outfits) SetNameEmbedding(ctx context.Context, outfitID string, embeddi
 // Redis.
 func (s *Outfits) ListByReferenceIDs(ctx context.Context, referenceIDs []string) ([]model.Outfit, error) {
 	return s.inner.ListByReferenceIDs(ctx, referenceIDs)
+}
+
+// Like, Unlike, dan RecordView diteruskan TANPA membatalkan cache.
+//
+// Ini disengaja dan bukan kelalaian. Invalidasi di sini bersifat global — satu
+// like menaikkan versi dan membuang seluruh entri outfit, detail maupun daftar
+// semua pemain. Padahal view tercatat pada hampir setiap outfit yang dibuka,
+// jadi cache akan kosong terus-menerus dan lapisan ini justru berubah jadi
+// beban murni: tiap request tetap memukul Postgres, ditambah ongkos Redis.
+//
+// Harganya: likeCount dan viewCount pada daftar yang ter-cache bisa tertinggal
+// paling lama selama CACHE_TTL (bawaan 1 menit), begitu juga urutan
+// mostLiked/mostViewed. Untuk angka popularitas itu wajar — dan GET detail
+// satu outfit ikut aturan yang sama. Yang tidak boleh basi adalah tabel
+// OUTFIT_LIKE/OUTFIT_VIEW itu sendiri, dan tabel itu ditulis langsung tanpa
+// melewati cache.
+//
+// Angka pada balasan ketiga operasi ini juga tidak ikut basi: yang dikembalikan
+// adalah EngagementCounts dari penyimpanan di baliknya, dibaca di dalam
+// transaksi penulisan — bukan hasil pembacaan ter-cache yang ditambah satu.
+func (s *Outfits) Like(ctx context.Context, outfitID string, userID int64, at time.Time) (store.EngagementCounts, error) {
+	return s.inner.Like(ctx, outfitID, userID, at)
+}
+
+// Unlike diteruskan tanpa invalidasi — alasannya sama dengan Like.
+func (s *Outfits) Unlike(ctx context.Context, outfitID string, userID int64) (store.EngagementCounts, error) {
+	return s.inner.Unlike(ctx, outfitID, userID)
+}
+
+// RecordView diteruskan tanpa invalidasi — alasannya sama dengan Like.
+func (s *Outfits) RecordView(ctx context.Context, outfitID string, userID int64, at time.Time) (store.EngagementCounts, error) {
+	return s.inner.RecordView(ctx, outfitID, userID, at)
+}
+
+// Liked diteruskan tanpa cache: jawabannya per pemain, jadi entri cache-nya
+// hampir tidak pernah terpakai ulang dan hanya membebani Redis.
+func (s *Outfits) Liked(ctx context.Context, userID int64, outfitIDs []string) (map[string]bool, error) {
+	return s.inner.Liked(ctx, userID, outfitIDs)
 }
 
 // Update meneruskan penulisan lalu membatalkan seluruh cache outfit.
