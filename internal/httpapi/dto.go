@@ -186,6 +186,22 @@ type outfitItemDTO struct {
 	// bundleId sekali.
 	BundleID   int64  `json:"bundleId,omitempty"`
 	BundleName string `json:"bundleName,omitempty"`
+	// Terisi hanya kalau klien melaporkan koreksi penempatan. Komponen yang
+	// tidak dilaporkan keluar sebagai null, bukan nol — nol berarti koreksi
+	// eksplisit ke titik asal.
+	Adjust *itemAdjustDTO `json:"adjust,omitempty"`
+}
+
+type itemAdjustDTO struct {
+	Pos   *vec3DTO `json:"pos"`
+	Rot   *vec3DTO `json:"rot"`
+	Scale *vec3DTO `json:"scale"`
+}
+
+type vec3DTO struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
 }
 
 type outfitDetailDTO struct {
@@ -219,9 +235,28 @@ func newOutfitItems(items []model.OutfitItem) []outfitItemDTO {
 			Price:      item.Price,
 			BundleID:   item.BundleID,
 			BundleName: item.BundleName,
+			Adjust:     newItemAdjust(item.Adjust),
 		})
 	}
 	return out
+}
+
+func newItemAdjust(adjust *model.ItemAdjust) *itemAdjustDTO {
+	if adjust == nil {
+		return nil
+	}
+	return &itemAdjustDTO{
+		Pos:   newVec3(adjust.Pos),
+		Rot:   newVec3(adjust.Rot),
+		Scale: newVec3(adjust.Scale),
+	}
+}
+
+func newVec3(v *model.Vec3) *vec3DTO {
+	if v == nil {
+		return nil
+	}
+	return &vec3DTO{X: v.X, Y: v.Y, Z: v.Z}
 }
 
 func newOutfitDetail(o model.Outfit) outfitDetailDTO {

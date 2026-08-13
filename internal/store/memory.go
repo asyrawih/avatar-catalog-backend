@@ -564,6 +564,12 @@ func cloneOutfit(o model.Outfit) model.Outfit {
 	clone := o
 	clone.CustomTags = append([]string(nil), o.CustomTags...)
 	clone.Items = append([]model.OutfitItem(nil), o.Items...)
+	// Adjust adalah pointer: menyalin slice saja membuat penyimpanan dan
+	// pemanggil berbagi struct yang sama, jadi koreksi yang diubah pemanggil
+	// diam-diam mengubah isi store.
+	for i := range clone.Items {
+		clone.Items[i].Adjust = cloneAdjust(clone.Items[i].Adjust)
+	}
 	// Urut slot supaya bentuk respons sama persis dengan penyimpanan Postgres;
 	// OUTFIT_ITEM tidak punya kolom urutan, jadi slot yang dipakai.
 	sort.Slice(clone.Items, func(i, j int) bool { return clone.Items[i].Slot < clone.Items[j].Slot })
@@ -588,6 +594,25 @@ func cloneOutfit(o model.Outfit) model.Outfit {
 		clone.Body = &body
 	}
 	return clone
+}
+
+func cloneAdjust(adjust *model.ItemAdjust) *model.ItemAdjust {
+	if adjust == nil {
+		return nil
+	}
+	return &model.ItemAdjust{
+		Pos:   cloneVec3(adjust.Pos),
+		Rot:   cloneVec3(adjust.Rot),
+		Scale: cloneVec3(adjust.Scale),
+	}
+}
+
+func cloneVec3(v *model.Vec3) *model.Vec3 {
+	if v == nil {
+		return nil
+	}
+	clone := *v
+	return &clone
 }
 
 func cloneTransaction(tx model.Transaction) model.Transaction {

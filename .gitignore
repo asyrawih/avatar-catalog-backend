@@ -6,6 +6,10 @@ bin/
 .idea/
 .vscode/
 
+# Berkas bawaan Finder. Muncul di direktori mana pun yang pernah dibuka, jadi
+# polanya tanpa garis miring supaya cocok di semua tingkat.
+.DS_Store
+
 # Environment Postman yang sudah terisi kunci API. Kunci bersifat rahasia dan
 # tidak boleh masuk git; yang di-commit hanya template kosongnya.
 postman/*.local.json

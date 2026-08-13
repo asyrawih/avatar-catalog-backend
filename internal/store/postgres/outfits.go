@@ -565,7 +565,7 @@ func itemsForTx(ctx context.Context, tx pgx.Tx, outfitIDs []string) (map[string]
 
 const outfitItemsQuery = `
 	SELECT outfit_id, asset_id, slot, name, asset_type, price,
-	       coalesce(bundle_id, 0), bundle_name
+	       coalesce(bundle_id, 0), bundle_name, adjust
 	FROM outfit_item
 	WHERE outfit_id = ANY($1)
 	ORDER BY outfit_id, slot`
@@ -585,10 +585,15 @@ func collectOutfitItems(rows pgx.Rows, outfits int) (map[string][]model.OutfitIt
 		var (
 			outfitID string
 			item     model.OutfitItem
+			adjust   []byte
 		)
 		if err := rows.Scan(&outfitID, &item.AssetID, &item.Slot,
 			&item.Name, &item.AssetType, &item.Price,
-			&item.BundleID, &item.BundleName); err != nil {
+			&item.BundleID, &item.BundleName, &adjust); err != nil {
+			return nil, err
+		}
+		var err error
+		if item.Adjust, err = unmarshalAdjust(adjust); err != nil {
 			return nil, err
 		}
 		slice, ok := out[outfitID]
@@ -609,12 +614,16 @@ func insertOutfitItems(ctx context.Context, tx pgx.Tx, outfitID string, items []
 
 	batch := &pgx.Batch{}
 	for _, item := range items {
+		adjust, err := marshalAdjust(item.Adjust)
+		if err != nil {
+			return err
+		}
 		batch.Queue(`
 			INSERT INTO outfit_item (outfit_id, asset_id, slot, name, asset_type, price,
-			                         bundle_id, bundle_name)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			                         bundle_id, bundle_name, adjust)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 			outfitID, item.AssetID, item.Slot, item.Name, item.AssetType, item.Price,
-			nullableInt64(item.BundleID), item.BundleName)
+			nullableInt64(item.BundleID), item.BundleName, adjust)
 	}
 
 	results := tx.SendBatch(ctx, batch)
@@ -737,6 +746,77 @@ func unmarshalBody(raw []byte) (*model.AvatarBody, error) {
 		return nil, nil
 	}
 	return &out, nil
+}
+
+// OUTFIT_ITEM.adjust disimpan sebagai jsonb dengan alasan yang sama seperti
+// OUTFIT.body — blob render yang dikembalikan apa adanya, tidak pernah dipakai
+// menyaring maupun mengurutkan. Bentuk JSON-nya ditulis eksplisit di sini
+// supaya isi kolom tidak ikut berubah kalau field di paket model diganti nama.
+//
+// Ketiga komponen memakai pointer, bukan omitempty pada nilai: pos {0,0,0}
+// adalah koreksi yang sah dan wajib bertahan lewat penyimpanan, sedangkan
+// komponen yang tidak dilaporkan harus tetap keluar sebagai null.
+type adjustJSON struct {
+	Pos   *vec3JSON `json:"pos"`
+	Rot   *vec3JSON `json:"rot"`
+	Scale *vec3JSON `json:"scale"`
+}
+
+type vec3JSON struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+func marshalAdjust(adjust *model.ItemAdjust) ([]byte, error) {
+	if adjust == nil {
+		return nil, nil
+	}
+
+	out := adjustJSON{
+		Pos:   toVec3JSON(adjust.Pos),
+		Rot:   toVec3JSON(adjust.Rot),
+		Scale: toVec3JSON(adjust.Scale),
+	}
+	if out.Pos == nil && out.Rot == nil && out.Scale == nil {
+		return nil, nil
+	}
+	return json.Marshal(out)
+}
+
+func unmarshalAdjust(raw []byte) (*model.ItemAdjust, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var stored adjustJSON
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, err
+	}
+
+	out := model.ItemAdjust{
+		Pos:   toModelVec3(stored.Pos),
+		Rot:   toModelVec3(stored.Rot),
+		Scale: toModelVec3(stored.Scale),
+	}
+	if out.Pos == nil && out.Rot == nil && out.Scale == nil {
+		return nil, nil
+	}
+	return &out, nil
+}
+
+func toVec3JSON(v *model.Vec3) *vec3JSON {
+	if v == nil {
+		return nil
+	}
+	return &vec3JSON{X: v.X, Y: v.Y, Z: v.Z}
+}
+
+func toModelVec3(v *vec3JSON) *model.Vec3 {
+	if v == nil {
+		return nil
+	}
+	return &model.Vec3{X: v.X, Y: v.Y, Z: v.Z}
 }
 
 // collectOutfits membaca seluruh baris hasil.

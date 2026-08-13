@@ -121,6 +121,30 @@ type OutfitItem struct {
 	// jadi penjumlah harga wajib menghitung tiap BundleID sekali saja.
 	BundleID   int64
 	BundleName string
+	// Adjust adalah koreksi penempatan asset pada rig yang dilaporkan klien.
+	// nil = klien tidak melaporkannya, dan itu berbeda dari melaporkan nol:
+	// nol adalah koreksi eksplisit "jangan digeser", sedangkan nil berarti
+	// pemasangnya bebas memakai penempatan bawaan asset.
+	Adjust *ItemAdjust
+}
+
+// ItemAdjust adalah koreksi transform satu item terhadap penempatan bawaannya.
+//
+// Ketiga komponennya berdiri sendiri dan boleh nil: item yang hanya perlu
+// digeser melaporkan Pos saja, dan Rot/Scale yang nil berarti "biarkan apa
+// adanya" — bukan rotasi nol atau skala nol, yang akan merusak render.
+type ItemAdjust struct {
+	Pos   *Vec3
+	Rot   *Vec3
+	Scale *Vec3
+}
+
+// Vec3 adalah tiga sumbu koreksi. Nilainya dilaporkan klien dan disimpan apa
+// adanya — backend tidak punya rig untuk memverifikasi kewajarannya.
+type Vec3 struct {
+	X float64
+	Y float64
+	Z float64
 }
 
 // Transaction adalah catatan pembelian dari game server (tabel TRANSACTION).

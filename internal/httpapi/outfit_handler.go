@@ -29,6 +29,22 @@ type outfitItemBody struct {
 	// paket adalah harga bundle induk yang terulang di tiap bagiannya.
 	BundleID   int64  `json:"bundleId"`
 	BundleName string `json:"bundleName"`
+	// adjust opsional: koreksi penempatan asset pada rig. Tiap komponennya
+	// berdiri sendiri dan boleh null — null berarti "biarkan bawaannya",
+	// bukan nol.
+	Adjust *itemAdjustBody `json:"adjust"`
+}
+
+type itemAdjustBody struct {
+	Pos   *vec3Body `json:"pos"`
+	Rot   *vec3Body `json:"rot"`
+	Scale *vec3Body `json:"scale"`
+}
+
+type vec3Body struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
 }
 
 // avatarBodyBody menerima bentuk body yang sama persis dengan yang dikeluarkan
@@ -101,9 +117,33 @@ func toModelItems(items []outfitItemBody) []model.OutfitItem {
 			Price:      item.Price,
 			BundleID:   item.BundleID,
 			BundleName: item.BundleName,
+			Adjust:     toModelAdjust(item.Adjust),
 		})
 	}
 	return out
+}
+
+func toModelAdjust(adjust *itemAdjustBody) *model.ItemAdjust {
+	if adjust == nil {
+		return nil
+	}
+
+	out := model.ItemAdjust{
+		Pos:   toModelVec3(adjust.Pos),
+		Rot:   toModelVec3(adjust.Rot),
+		Scale: toModelVec3(adjust.Scale),
+	}
+	if out.Pos == nil && out.Rot == nil && out.Scale == nil {
+		return nil
+	}
+	return &out
+}
+
+func toModelVec3(v *vec3Body) *model.Vec3 {
+	if v == nil {
+		return nil
+	}
+	return &model.Vec3{X: v.X, Y: v.Y, Z: v.Z}
 }
 
 func toModelBody(body *avatarBodyBody) *model.AvatarBody {

@@ -131,6 +131,12 @@ CREATE TABLE outfit_item (
     -- NULL berarti item satuan biasa.
     bundle_id   bigint,
     bundle_name text NOT NULL DEFAULT '',
+    -- Koreksi penempatan asset pada rig ({pos, rot, scale}), disimpan sebagai
+    -- jsonb dengan alasan yang sama seperti OUTFIT.body: isinya blob render
+    -- yang dikembalikan apa adanya, tidak pernah disaring maupun diurutkan,
+    -- jadi sembilan kolom terpisah hanya melebarkan tabel tanpa dipakai.
+    -- NULL berarti klien tidak melaporkannya — berbeda dari melaporkan nol.
+    adjust jsonb,
     PRIMARY KEY (outfit_id, asset_id)
 );
 
