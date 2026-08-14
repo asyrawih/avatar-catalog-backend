@@ -47,7 +47,10 @@ func seedOutfits(o *MemoryOutfits) {
 		Items: []model.OutfitItem{
 			{AssetID: 78872304386489, Slot: "Hair", Name: "BLOND BARREL TWISTS DREADS", AssetType: "HairAccessory", Price: 69},
 			{AssetID: 14433369343, Slot: "Jacket", Name: "Hero Jacket Oni Blood Moon", AssetType: "Accessory", Price: 79},
-			{AssetID: 116123466288288, Slot: "Face", Name: "Carter Shades w Goatee", AssetType: "FaceAccessory", Price: 99},
+			// Satu item contoh membawa adjust supaya bentuknya kelihatan saat
+			// dev; sisanya sengaja null, karena itu keadaan yang lumrah.
+			{AssetID: 116123466288288, Slot: "Face", Name: "Carter Shades w Goatee", AssetType: "FaceAccessory", Price: 99,
+				Adjust: &model.ItemAdjust{Pos: &model.Vec3{Y: -0.3}}},
 		},
 		CreatedAt: time.Date(2026, 7, 28, 9, 12, 44, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 8, 4, 11, 3, 19, 0, time.UTC),
@@ -62,7 +65,11 @@ func seedOutfits(o *MemoryOutfits) {
 		IsPublic:    false,
 		CustomTags:  []string{"category:doll", "gender:female"},
 		Items: []model.OutfitItem{
-			{AssetID: 120044550011, Slot: "Hair", Name: "Pink Bow Twin Tails", AssetType: "HairAccessory", Price: 55},
+			{AssetID: 120044550011, Slot: "Hair", Name: "Pink Bow Twin Tails", AssetType: "HairAccessory", Price: 55,
+				Adjust: &model.ItemAdjust{
+					Pos:   &model.Vec3{Y: 0.12},
+					Scale: &model.Vec3{X: 1.05, Y: 1.05, Z: 1.05},
+				}},
 			{AssetID: 120044550012, Slot: "Face", Name: "Sugar Heart Blush", AssetType: "FaceAccessory", Price: 35},
 			{AssetID: 120044550013, Slot: "Jacket", Name: "Frill Cardigan", AssetType: "Accessory", Price: 85},
 			{AssetID: 120044550014, Slot: "Pants", Name: "Pastel Pleated Skirt", AssetType: "Pants", Price: 45},

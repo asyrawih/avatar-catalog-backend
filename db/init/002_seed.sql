@@ -21,15 +21,19 @@ INSERT INTO outfit
      'Girly Pop Casual', false, '["category:doll","gender:female"]'::jsonb,
      '2026-07-20T08:00:00Z', '2026-08-01T18:40:02Z');
 
-INSERT INTO outfit_item (outfit_id, asset_id, slot, name, asset_type, price) VALUES
-    ('otf_9f2a41', 78872304386489,  'Hair',     'BLOND BARREL TWISTS DREADS', 'HairAccessory', 69),
-    ('otf_9f2a41', 14433369343,     'Jacket',   'Hero Jacket Oni Blood Moon', 'Accessory',     79),
-    ('otf_9f2a41', 116123466288288, 'Face',     'Carter Shades w Goatee',     'FaceAccessory', 99),
-    ('otf_3c88de', 120044550011,    'Hair',     'Pink Bow Twin Tails',        'HairAccessory', 55),
-    ('otf_3c88de', 120044550012,    'Face',     'Sugar Heart Blush',          'FaceAccessory', 35),
-    ('otf_3c88de', 120044550013,    'Jacket',   'Frill Cardigan',             'Accessory',     85),
-    ('otf_3c88de', 120044550014,    'Pants',    'Pastel Pleated Skirt',       'Pants',         45),
-    ('otf_3c88de', 120044550015,    'Shoes',    'Doll Mary Janes',            'Accessory',     60),
-    ('otf_3c88de', 120044550016,    'Back',     'Chibi Star Backpack',        'Accessory',     40);
+-- Dua item contoh membawa adjust supaya bentuknya kelihatan saat dev; sisanya
+-- sengaja NULL, karena item tanpa koreksi penempatan adalah keadaan lumrah.
+INSERT INTO outfit_item (outfit_id, asset_id, slot, name, asset_type, price, adjust) VALUES
+    ('otf_9f2a41', 78872304386489,  'Hair',     'BLOND BARREL TWISTS DREADS', 'HairAccessory', 69, NULL),
+    ('otf_9f2a41', 14433369343,     'Jacket',   'Hero Jacket Oni Blood Moon', 'Accessory',     79, NULL),
+    ('otf_9f2a41', 116123466288288, 'Face',     'Carter Shades w Goatee',     'FaceAccessory', 99,
+        '{"pos": {"x": 0, "y": -0.3, "z": 0}, "rot": null, "scale": null}'),
+    ('otf_3c88de', 120044550011,    'Hair',     'Pink Bow Twin Tails',        'HairAccessory', 55,
+        '{"pos": {"x": 0, "y": 0.12, "z": 0}, "rot": null, "scale": {"x": 1.05, "y": 1.05, "z": 1.05}}'),
+    ('otf_3c88de', 120044550012,    'Face',     'Sugar Heart Blush',          'FaceAccessory', 35, NULL),
+    ('otf_3c88de', 120044550013,    'Jacket',   'Frill Cardigan',             'Accessory',     85, NULL),
+    ('otf_3c88de', 120044550014,    'Pants',    'Pastel Pleated Skirt',       'Pants',         45, NULL),
+    ('otf_3c88de', 120044550015,    'Shoes',    'Doll Mary Janes',            'Accessory',     60, NULL),
+    ('otf_3c88de', 120044550016,    'Back',     'Chibi Star Backpack',        'Accessory',     40, NULL);
 
 COMMIT;

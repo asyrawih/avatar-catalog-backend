@@ -186,10 +186,12 @@ type outfitItemDTO struct {
 	// bundleId sekali.
 	BundleID   int64  `json:"bundleId,omitempty"`
 	BundleName string `json:"bundleName,omitempty"`
-	// Terisi hanya kalau klien melaporkan koreksi penempatan. Komponen yang
-	// tidak dilaporkan keluar sebagai null, bukan nol — nol berarti koreksi
-	// eksplisit ke titik asal.
-	Adjust *itemAdjustDTO `json:"adjust,omitempty"`
+	// Selalu dikirim, seperti body di level outfit: null berarti klien tidak
+	// melaporkan koreksi penempatan, dan pemasang boleh memakai bawaan asset.
+	// Tanpa omitempty supaya bentuk item tidak berubah-ubah antar outfit —
+	// klien membaca satu bentuk saja, bukan dua. Nol tetap berbeda dari null:
+	// nol adalah koreksi eksplisit ke titik asal.
+	Adjust *itemAdjustDTO `json:"adjust"`
 }
 
 type itemAdjustDTO struct {

@@ -78,8 +78,14 @@ func requireAdjust(t *testing.T, outfit map[string]any, endpoint string) {
 	for _, entry := range items {
 		item, _ := entry.(map[string]any)
 		if item["slot"] != "Hair" {
-			if _, ada := item["adjust"]; ada {
-				t.Errorf("%s: item slot %v punya adjust, ingin tidak ada", endpoint, item["slot"])
+			// adjust selalu ada sebagai key; item tanpa koreksi membawa null,
+			// bukan objek karangan.
+			adjust, ada := item["adjust"]
+			if !ada {
+				t.Errorf("%s: item slot %v tanpa key adjust, ingin null", endpoint, item["slot"])
+			}
+			if adjust != nil {
+				t.Errorf("%s: item slot %v adjust = %v, ingin null", endpoint, item["slot"], adjust)
 			}
 			continue
 		}
