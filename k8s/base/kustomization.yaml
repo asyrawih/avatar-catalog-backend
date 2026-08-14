@@ -14,3 +14,8 @@ resources:
   - redis.yaml
   - api.yaml
   - ingress.yaml
+
+# migrate-job.yaml SENGAJA tidak disebut di sini. Job bersifat immutable
+# setelah dibuat (spec.template tidak bisa diubah), jadi kubectl apply -k akan
+# gagal begitu Job sebelumnya sudah selesai. deploy.sh mengelola Job ini
+# sendiri: hapus yang lama, lalu buat yang baru, di setiap deploy.

@@ -1,4 +1,4 @@
--- Migrasi sekali jalan: field bundle dan thumbnail.
+-- Migrasi: field bundle dan thumbnail.
 --
 -- Game server kini melaporkan bagian paket (bundle) dengan price = harga
 -- bundle induk yang TERULANG di tiap bagiannya, plus bundleId/bundleName —
@@ -6,10 +6,11 @@
 -- menghitung per bundle_id sekali; perhitungan cashback sudah dikoreksi ikut
 -- aturan itu.
 --
--- Dipakai untuk database yang sudah terlanjur dibuat tanpa kolom ini. Database
--- baru tidak butuh ini — db/init/001_schema.sql sudah berbentuk akhir.
---
---   docker compose exec -T db psql -U avatar -d avatar_catalog -v ON_ERROR_STOP=1 < db/migrate_add_bundle_fields.sql
+-- Idempoten dan aman dijalankan pada database mana pun (baru maupun lama) —
+-- pada database baru db/init/001_schema.sql sudah berbentuk akhir, jadi setiap
+-- pernyataan di sini jadi no-op. Diterapkan otomatis oleh Job
+-- avatar-catalog-db-migrate (lihat k8s/base/migrate-job.yaml) sebelum setiap
+-- rollout api; tidak perlu dijalankan manual.
 
 BEGIN;
 

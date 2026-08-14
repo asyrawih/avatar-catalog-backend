@@ -34,9 +34,30 @@ kubectl create configmap avatar-catalog-db-init \
 echo "==> apply overlay $OVERLAY"
 kubectl apply -k "$ROOT/k8s/overlays/$OVERLAY"
 
-echo "==> menunggu rollout"
+echo "==> menunggu db siap"
 kubectl -n "$NAMESPACE" rollout status statefulset/avatar-catalog-db --timeout=5m
 kubectl -n "$NAMESPACE" rollout status deployment/avatar-catalog-redis --timeout=2m
+
+# Skrip di db/migrations diterapkan ke database yang sudah berisi data, tiap
+# deploy, sebelum rollout api — supaya pod baru tidak pernah mengejar kolom
+# yang belum ada (lihat k8s/README.md bagian "Perubahan skema database"). Job
+# bersifat immutable setelah dibuat, jadi yang lama dihapus dulu.
+echo "==> configmap avatar-catalog-db-migrations (dari db/migrations)"
+kubectl create configmap avatar-catalog-db-migrations \
+	--namespace "$NAMESPACE" \
+	--from-file="$ROOT/db/migrations" \
+	--dry-run=client -o yaml | kubectl apply -f -
+
+echo "==> menjalankan migrasi database"
+kubectl -n "$NAMESPACE" delete job avatar-catalog-db-migrate --ignore-not-found
+kubectl apply -n "$NAMESPACE" -f "$ROOT/k8s/base/migrate-job.yaml"
+if ! kubectl -n "$NAMESPACE" wait --for=condition=complete job/avatar-catalog-db-migrate --timeout=2m; then
+	echo "migrasi database gagal — log:" >&2
+	kubectl -n "$NAMESPACE" logs job/avatar-catalog-db-migrate --all-containers >&2 || true
+	exit 1
+fi
+
+echo "==> menunggu rollout api"
 kubectl -n "$NAMESPACE" rollout status deployment/avatar-catalog-api --timeout=5m
 
 echo

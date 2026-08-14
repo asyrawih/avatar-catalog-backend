@@ -1,0 +1,86 @@
+# Menerapkan db/migrations/*.sql ke database yang sudah berisi data, secara
+# berurutan berdasarkan nama file. Dijalankan deploy.sh sebelum rollout api,
+# supaya skema selalu mengejar sebelum pod baru mengandalkannya.
+#
+# Semua file di db/migrations ditulis idempoten (ADD COLUMN IF NOT EXISTS, dst)
+# dan aman dijalankan berulang termasuk pada database baru -- di database baru
+# db/init/001_schema.sql sudah berbentuk akhir, jadi setiap pernyataan di sini
+# jadi no-op. Karena itu Job ini tidak butuh tabel pelacakan migrasi mana yang
+# sudah/belum diterapkan.
+#
+# Job bersifat immutable setelah dibuat: deploy.sh menghapus Job lama (kalau
+# ada) sebelum membuat yang baru di setiap deploy.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: avatar-catalog-db-migrate
+  labels:
+    app.kubernetes.io/name: db-migrate
+    app.kubernetes.io/part-of: avatar-catalog
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: db-migrate
+        app.kubernetes.io/part-of: avatar-catalog
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+      containers:
+        - name: migrate
+          # Image yang sama dengan StatefulSet db (dan init container api),
+          # supaya tidak menambah image yang harus ditarik dan versi psql-nya
+          # selalu cocok dengan server.
+          image: pgvector/pgvector:pg17
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              for f in /migrations/*.sql; do
+                echo "==> menerapkan $f"
+                psql -v ON_ERROR_STOP=1 -f "$f"
+              done
+          env:
+            - name: PGHOST
+              value: avatar-catalog-db
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_USER
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_DB
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: avatar-catalog-secret
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: migrations
+          configMap:
+            # Dibuat dari db/migrations -- lihat k8s/deploy.sh.
+            name: avatar-catalog-db-migrations

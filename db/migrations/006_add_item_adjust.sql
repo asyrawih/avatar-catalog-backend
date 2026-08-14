@@ -1,17 +1,18 @@
--- Migrasi sekali jalan: menambah OUTFIT_ITEM.adjust.
+-- Migrasi: menambah OUTFIT_ITEM.adjust.
 --
 -- Klien kini melaporkan koreksi penempatan per item ({pos, rot, scale}), dan
 -- backend menyimpannya apa adanya supaya hasil GET bisa dikirim balik untuk
 -- merender avatar persis seperti yang disimpan pemainnya.
 --
--- Dipakai untuk database yang sudah terlanjur dibuat tanpa kolom ini. Database
--- baru tidak butuh ini — db/init/001_schema.sql sudah berbentuk akhir.
+-- Idempoten dan aman dijalankan pada database mana pun (baru maupun lama) —
+-- pada database baru db/init/001_schema.sql sudah berbentuk akhir, jadi setiap
+-- pernyataan di sini jadi no-op. Diterapkan otomatis oleh Job
+-- avatar-catalog-db-migrate (lihat k8s/base/migrate-job.yaml) sebelum setiap
+-- rollout api; tidak perlu dijalankan manual.
 --
 -- Kolomnya nullable tanpa default: item lama memang tidak pernah melaporkan
 -- koreksi, dan NULL adalah cara jujur mengatakannya. Mengisi dengan nol akan
 -- berarti "geser ke nol" — sebuah koreksi yang tidak pernah diminta siapa pun.
---
---   docker compose exec -T db psql -U avatar -d avatar_catalog -v ON_ERROR_STOP=1 < db/migrate_add_item_adjust.sql
 
 BEGIN;
 

@@ -1,12 +1,13 @@
--- Migrasi sekali jalan: melepas katalog dari database yang sudah berisi data.
+-- Migrasi: melepas katalog dari database yang sudah berisi data.
 --
--- Dipakai untuk database yang sudah terlanjur dibuat dengan skema lama. Database
--- baru tidak butuh ini — db/init/001_schema.sql sudah berbentuk akhir.
+-- Idempoten dan aman dijalankan pada database mana pun (baru maupun lama) —
+-- pada database baru db/init/001_schema.sql sudah berbentuk akhir, jadi setiap
+-- pernyataan di sini jadi no-op. Diterapkan otomatis oleh Job
+-- avatar-catalog-db-migrate (lihat k8s/base/migrate-job.yaml) sebelum setiap
+-- rollout api; tidak perlu dijalankan manual.
 --
 -- Detail item dipindahkan dari CATALOG_ITEM ke OUTFIT_ITEM lebih dulu, jadi
 -- outfit yang sudah ada tidak kehilangan nama, tipe, dan harga itemnya.
---
---   docker compose exec -T db psql -U avatar -d avatar_catalog -v ON_ERROR_STOP=1 < db/migrate_drop_catalog.sql
 
 BEGIN;
 

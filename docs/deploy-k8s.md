@@ -253,8 +253,9 @@ Dari root repo di server (butuh `db/init/` ada, jadi clone repo-nya):
 ```
 
 Script itu, berurutan: buat namespace → buat ConfigMap `avatar-catalog-db-init`
-dari `db/init/*.sql` → `kubectl apply -k` overlay → tunggu rollout db, redis,
-api.
+dari `db/init/*.sql` → `kubectl apply -k` overlay → tunggu rollout db dan
+redis → terapkan `db/migrations/*.sql` lewat Job `avatar-catalog-db-migrate`
+→ tunggu rollout api.
 
 Skema yang ikut terpasang di database kosong:
 
@@ -266,8 +267,10 @@ Skema yang ikut terpasang di database kosong:
 | `004_engagement.sql` | `outfit_like`, `outfit_view`, kolom `like_count`/`view_count` |
 | `005_api_key.sql` | `api_key` |
 
-Semuanya hanya dijalankan Postgres saat PGDATA masih kosong. Untuk database
-yang sudah berisi, terapkan sendiri — lihat
+`db/init/*.sql` hanya dijalankan Postgres saat PGDATA masih kosong — itu
+bentuk database baru. Perubahan skema sesudahnya (`db/migrations/*.sql`)
+diterapkan otomatis oleh Job di atas pada setiap `./k8s/deploy.sh`, termasuk
+di database yang sudah berisi data — lihat
 [Perubahan skema database](#perubahan-skema-database).
 
 Verifikasi:
@@ -436,26 +439,26 @@ versi, bukan `latest`; dengan `latest` perintah rollback tidak punya arti.
 ### Perubahan skema database
 
 Skrip `db/init/*.sql` **hanya** dieksekusi saat PGDATA masih kosong — sama
-seperti di docker compose. Database yang sudah berisi tidak akan ikut berubah
-saat kamu deploy versi baru, dan gejalanya adalah api gagal start atau
-menjawab `500` karena kolom yang dicarinya tidak ada.
+seperti di docker compose — dan hanya membentuk database baru.
 
-Terapkan sendiri, berurutan:
+Perubahan skema setelahnya hidup di `db/migrations/*.sql`: file bernomor,
+ditulis idempoten (`ADD COLUMN IF NOT EXISTS`, dst), aman diterapkan berulang
+kali dan aman diterapkan pada database baru sekalipun (semuanya jadi no-op
+karena `db/init/001_schema.sql` sudah berbentuk akhir). `./k8s/deploy.sh`
+menerapkan seluruh `db/migrations` lewat Job `avatar-catalog-db-migrate`
+**sebelum** menunggu rollout api, jadi urutan "migrasi dulu, baru pod baru"
+sudah dijamin skrip — tidak ada lagi langkah manual yang bisa lupa dijalankan.
+
+Menambah kolom atau tabel baru? Tambahkan file bernomor berikutnya di
+`db/migrations/`, bukan skrip sekali-jalan terpisah yang harus diingat-ingat
+siapa pun untuk dijalankan manual.
+
+Kalau migrasinya gagal, `deploy.sh` berhenti sebelum menyentuh rollout api dan
+mencetak log Job-nya. Untuk menelusuri manual:
 
 ```bash
-for f in db/init/004_engagement.sql db/init/005_api_key.sql; do
-  kubectl -n avatar-catalog exec -i statefulset/avatar-catalog-db -- \
-    psql -U avatar -d avatar_catalog -v ON_ERROR_STOP=1 < "$f"
-done
+kubectl -n avatar-catalog logs job/avatar-catalog-db-migrate
 ```
-
-`004` dan `005` ditulis idempoten (`IF NOT EXISTS`), jadi aman dijalankan
-berulang dan aman dijalankan pada database yang sudah punya sebagian tabelnya.
-`001`–`003` **tidak** — jangan dijalankan ulang pada database berisi.
-
-Urutan yang benar saat merilis versi yang butuh skema baru: terapkan migrasi
-dulu, baru rollout api. Terbalik berarti pod baru berjalan di atas skema lama.
-Kalau nanti sering, tambahkan Job migrasi yang jalan sebelum rollout.
 
 ### Ubah konfigurasi non-rahasia
 
@@ -532,7 +535,7 @@ kubectl -n avatar-catalog port-forward svc/avatar-catalog-db 5432:5432
 | Semua `/v1` **401** | Belum ada kunci API, atau kunci yang dipakai salah/dicabut. `apikey list`; terbitkan dengan 1.8. Ini juga jawaban yang benar untuk request tanpa `Authorization` |
 | **403** `insufficient_scope` | Kunci sah tapi role-nya tidak punya izin itu — mis. kunci `ai` mencoba menulis. Lihat role di `apikey roles` |
 | **403** `actor_assert_forbidden` | Kunci tanpa `actor:assert` mengirim `X-User-Id`. Hanya kunci `game-server` yang boleh bertindak atas nama pemain |
-| Pod `api` **CrashLoopBackOff** setelah upgrade | Skema belum dimigrasi. Terapkan `004`/`005` lalu rollout ulang |
+| Pod `api` **CrashLoopBackOff** setelah upgrade | Skema belum dimigrasi. Cek `kubectl -n avatar-catalog logs job/avatar-catalog-db-migrate` — kalau Job-nya gagal, `deploy.sh` seharusnya sudah berhenti sebelum rollout api |
 | Sertifikat tidak terbit | `kubectl -n avatar-catalog describe certificate`. Umumnya DNS belum mengarah, atau port 80 tertutup sehingga HTTP-01 gagal |
 | HPA `<unknown>/70%` | metrics-server belum siap. `kubectl -n kube-system get deploy metrics-server` |
 | Data hilang setelah redeploy | PVC ikut terhapus. `kubectl delete -k` **tidak** menghapus PVC dari `volumeClaimTemplates`, tapi `kubectl delete pvc` iya. Cek dulu sebelum menghapus apa pun |

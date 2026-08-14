@@ -121,9 +121,13 @@ Password Postgres disusun jadi `DATABASE_URL` di `api.yaml` lewat ekspansi
 
 ## Catatan operasional
 
-- **Migrasi.** Sama seperti compose: `db/init/*.sql` hanya jalan saat PGDATA
-  masih kosong. Perubahan skema setelah database berisi harus diterapkan
-  sendiri (`kubectl exec` + `psql`, atau tambahkan Job migrasi).
+- **Migrasi.** `db/init/*.sql` hanya jalan saat PGDATA masih kosong — itu
+  membentuk database baru. Perubahan skema setelahnya hidup di
+  `db/migrations/*.sql`: file bernomor, idempoten, dan diterapkan otomatis
+  oleh `deploy.sh` lewat Job `avatar-catalog-db-migrate` sebelum rollout api,
+  jadi tidak ada lagi langkah manual yang bisa terlewat. Menambah kolom atau
+  tabel baru? Tambahkan file baru di `db/migrations` (nomor berikutnya, pakai
+  `IF NOT EXISTS`), bukan skrip sekali-jalan terpisah.
 - **Postgres single node.** `replicas: 1` di StatefulSet; menaikkannya tidak
   membuat replikasi. Untuk HA pakai operator (CloudNativePG/Zalando) atau
   Postgres terkelola, lalu hapus `postgres.yaml` dari base dan arahkan
