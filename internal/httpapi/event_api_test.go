@@ -176,3 +176,69 @@ func TestUbahEventYangTidakAda(t *testing.T) {
 	requireStatus(t, resp, body, http.StatusNotFound)
 	requireErrorCode(t, body, "event_not_found")
 }
+
+// Menghentikan event berjalan lewat endsAt=sekarang versi klien selalu kalah
+// cepat: input datetime-local hanya sampai menit, dan perjalanan request sudah
+// cukup membuat nilainya jatuh di masa lalu. active=false memakai jam server,
+// jadi tombol "hentikan" tidak gagal karena alasan sehalus itu.
+func TestHentikanEventBerjalanLewatActiveFalse(t *testing.T) {
+	fx := newLoginServer(t)
+	session := fx.login(t, fx.email, testPassword)
+
+	now := time.Now().UTC()
+	ev := createEvent(t, fx, session, "sedang-jalan", now.Add(-time.Hour), now.Add(time.Hour))
+	eventID := ev["eventId"].(string)
+
+	// Jalur lama memang gagal: "sekarang" dibulatkan ke menit sudah lewat.
+	resp, body := do(t, fx.srv, request{
+		method: http.MethodPatch, path: "/v1/cashback/events/" + eventID, headers: session,
+		body: map[string]any{"endsAt": now.Truncate(time.Minute).Format(time.RFC3339)},
+	})
+	requireStatus(t, resp, body, http.StatusUnprocessableEntity)
+	requireErrorCode(t, body, "window_in_past")
+
+	// Jalur barunya berhasil, dan eventnya langsung tidak aktif lagi.
+	resp, body = do(t, fx.srv, request{
+		method: http.MethodPatch, path: "/v1/cashback/events/" + eventID, headers: session,
+		body: map[string]any{"active": false},
+	})
+	requireStatus(t, resp, body, http.StatusOK)
+	if body["active"] != false {
+		t.Errorf("active = %v, ingin false", body["active"])
+	}
+	if body["phase"] != "finished" {
+		t.Errorf("phase = %v, ingin finished", body["phase"])
+	}
+
+	// Dan bonusnya berhenti berlaku: event itu tidak lagi terhitung aktif.
+	_, body = do(t, fx.srv, request{method: http.MethodGet, path: "/v1/cashback/events", headers: session})
+	for _, row := range body["data"].([]any) {
+		if e := row.(map[string]any); e["eventId"] == eventID && e["active"] == true {
+			t.Fatal("event masih aktif setelah dihentikan")
+		}
+	}
+}
+
+func TestActiveFalseHanyaUntukEventBerjalan(t *testing.T) {
+	fx := newLoginServer(t)
+	session := fx.login(t, fx.email, testPassword)
+
+	now := time.Now().UTC()
+	upcoming := createEvent(t, fx, session, "besok", now.Add(24*time.Hour), now.Add(48*time.Hour))
+	resp, body := do(t, fx.srv, request{
+		method: http.MethodPatch, path: "/v1/cashback/events/" + upcoming["eventId"].(string),
+		headers: session, body: map[string]any{"active": false},
+	})
+	requireStatus(t, resp, body, http.StatusConflict)
+	requireErrorCode(t, body, "event_not_started")
+
+	// Mengaktifkan ulang tidak didukung: itu menulis ulang periode yang rate-nya
+	// sudah terlanjur dihitung tanpa bonus.
+	running := createEvent(t, fx, session, "jalan", now.Add(-time.Hour), now.Add(time.Hour))
+	resp, body = do(t, fx.srv, request{
+		method: http.MethodPatch, path: "/v1/cashback/events/" + running["eventId"].(string),
+		headers: session, body: map[string]any{"active": true},
+	})
+	requireStatus(t, resp, body, http.StatusUnprocessableEntity)
+	requireErrorCode(t, body, "cannot_reactivate")
+}

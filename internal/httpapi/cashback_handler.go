@@ -353,6 +353,8 @@ type updateEventBody struct {
 	Name     *string    `json:"name"`
 	StartsAt *time.Time `json:"startsAt"`
 	EndsAt   *time.Time `json:"endsAt"`
+	// active=false menghentikan event berjalan sekarang, memakai jam server.
+	Active *bool `json:"active"`
 }
 
 // updateEvent menangani PATCH /v1/cashback/events/{eventId}.
@@ -361,7 +363,7 @@ func (h *cashbackHandler) updateEvent(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Name == nil && body.StartsAt == nil && body.EndsAt == nil {
+	if body.Name == nil && body.StartsAt == nil && body.EndsAt == nil && body.Active == nil {
 		writeError(w, apierr.Unprocessable("empty_update", "Tidak ada yang diubah"))
 		return
 	}
@@ -370,6 +372,7 @@ func (h *cashbackHandler) updateEvent(w http.ResponseWriter, r *http.Request) {
 		Name:     body.Name,
 		StartsAt: body.StartsAt,
 		EndsAt:   body.EndsAt,
+		Active:   body.Active,
 	})
 	if err != nil {
 		writeError(w, err)

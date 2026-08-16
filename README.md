@@ -362,8 +362,12 @@ ada eventnya.
 | `running` | hanya `endsAt`, dan tidak boleh mundur ke masa lalu |
 | `finished` | terkunci (`409 event_finished`) |
 
-Menghentikan event yang sedang berjalan dilakukan dengan memajukan `endsAt`,
-bukan `DELETE` (`409 event_started`). Tiap baris membawa `phase`, `editable`,
+Menghentikan event yang sedang berjalan: kirim `{"active": false}`. Waktu
+selesainya diisi dari **jam server**, bukan dari klien — input waktu di browser
+hanya sampai menit, jadi "sekarang" versi klien sudah jatuh di masa lalu saat
+tiba di server dan ditolak `window_in_past`. `DELETE` tetap tidak berlaku untuk
+event yang sudah mulai (`409 event_started`), dan `{"active": true}` ditolak
+(`422 cannot_reactivate`) — jadwalkan event baru. Tiap baris membawa `phase`, `editable`,
 dan `deletable` supaya klien tidak perlu menghitung ulang aturannya.
 
 Menjadwalkan jendela di masa lalu tetap boleh — backfill dan penyiapan data uji

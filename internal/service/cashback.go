@@ -471,6 +471,15 @@ type UpdateEventInput struct {
 	Name     *string
 	StartsAt *time.Time
 	EndsAt   *time.Time
+	// Active false menghentikan event yang sedang berjalan SEKARANG, memakai
+	// jam server.
+	//
+	// Ada sebagai field sendiri, bukan dibiarkan klien mengirim endsAt=sekarang,
+	// karena "sekarang" versi klien selalu kalah cepat: input datetime-local
+	// hanya sampai menit, dan beberapa detik perjalanan request sudah cukup
+	// membuat nilainya jatuh di masa lalu — lalu ditolak window_in_past. Sebuah
+	// tombol "hentikan" tidak boleh gagal karena alasan sehalus itu.
+	Active *bool
 }
 
 // EventPhase adalah kedudukan sebuah event terhadap waktu sekarang.
@@ -520,6 +529,30 @@ func (s *Cashback) UpdateEvent(ctx context.Context, eventID string, in UpdateEve
 	if phase == EventFinished {
 		return model.CashbackEvent{}, apierr.Conflict("event_finished",
 			"Event yang sudah selesai tidak bisa diubah")
+	}
+
+	// active=false ditangani lebih dulu dan berdiri sendiri: ia menetapkan
+	// endsAt dari jam server, jadi tidak boleh bercampur dengan endsAt kiriman
+	// klien yang bisa saling bertentangan.
+	if in.Active != nil {
+		if *in.Active {
+			return model.CashbackEvent{}, apierr.Unprocessable("cannot_reactivate",
+				"Event tidak bisa diaktifkan ulang; jadwalkan event baru")
+		}
+		if phase == EventUpcoming {
+			return model.CashbackEvent{}, apierr.Conflict("event_not_started",
+				"Event belum mulai, jadi belum aktif; hapus saja kalau tidak jadi dipakai")
+		}
+
+		stopped := ev
+		stopped.EndsAt = now
+		if err := s.cashback.UpdateEvent(ctx, stopped); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return model.CashbackEvent{}, apierr.NotFound("event_not_found", "Event tidak ditemukan")
+			}
+			return model.CashbackEvent{}, err
+		}
+		return stopped, nil
 	}
 	if phase == EventRunning && (in.Name != nil || in.StartsAt != nil) {
 		return model.CashbackEvent{}, apierr.Conflict("event_running",
