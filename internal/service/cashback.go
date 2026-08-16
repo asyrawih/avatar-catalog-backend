@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hanan/avatar-catalog-backend/internal/apierr"
@@ -236,6 +238,47 @@ func (s *Cashback) ListEntries(ctx context.Context, userID int64, rawCursor stri
 	return page, nil
 }
 
+// BalancePage adalah satu halaman ringkasan cashback lintas pemain.
+type BalancePage struct {
+	Balances   []store.UserBalance
+	NextCursor string
+	HasMore    bool
+}
+
+// ListBalances mengembalikan ringkasan cashback SELURUH pemain, aktivitas
+// terbaru dulu.
+//
+// Isinya sengaja hanya angka yang sudah ada di ledger — saldo, akrual,
+// pencairan, penarikan kembali. Rate berjalan tidak ikut: menghitungnya butuh
+// riwayat belanja tiap pemain satu per satu, dan angka itu baru berarti saat
+// sebuah transaksi dinilai, bukan sebagai kolom tabel yang basi begitu
+// dirender.
+func (s *Cashback) ListBalances(ctx context.Context, rawCursor string, limit int) (BalancePage, error) {
+	after, err := decodeCursor(rawCursor)
+	if err != nil {
+		return BalancePage{}, err
+	}
+
+	limit = paging.ClampLimit(limit, DefaultPageSize, MaxPageSize)
+	rows, hasMore, err := s.cashback.ListBalances(ctx, after, limit)
+	if err != nil {
+		return BalancePage{}, err
+	}
+
+	page := BalancePage{Balances: rows, HasMore: hasMore}
+	if hasMore && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		page.NextCursor, err = paging.Encode(paging.KeysetCursor{
+			At: last.LastEntryAt,
+			ID: strconv.FormatInt(last.UserID, 10),
+		})
+		if err != nil {
+			return BalancePage{}, err
+		}
+	}
+	return page, nil
+}
+
 // Redeem membuat request pencairan untuk seluruh saldo pemain saat ini.
 //
 // Saldo dipotong saat request dibuat, jadi tidak ada jendela saldo yang sama
@@ -406,6 +449,9 @@ func (s *Cashback) CreateEvent(ctx context.Context, in CreateEventInput) (model.
 	if !in.EndsAt.After(in.StartsAt) {
 		return model.CashbackEvent{}, apierr.Unprocessable("invalid_window", "endsAt harus setelah startsAt")
 	}
+	// Jendela di masa lalu sengaja TIDAK ditolak: backfill dan penyiapan data
+	// uji memakainya. Yang dijaga adalah perubahan sesudahnya — begitu jendela
+	// lewat, barisnya terkunci. Lihat UpdateEvent.
 
 	ev := model.CashbackEvent{
 		EventID:  s.newID("evt"),
@@ -417,6 +463,130 @@ func (s *Cashback) CreateEvent(ctx context.Context, in CreateEventInput) (model.
 		return model.CashbackEvent{}, err
 	}
 	return ev, nil
+}
+
+// UpdateEventInput adalah muatan PATCH /v1/cashback/events/{eventId}. Field
+// nil berarti tidak diubah.
+type UpdateEventInput struct {
+	Name     *string
+	StartsAt *time.Time
+	EndsAt   *time.Time
+}
+
+// EventPhase adalah kedudukan sebuah event terhadap waktu sekarang.
+type EventPhase string
+
+const (
+	EventUpcoming EventPhase = "upcoming"
+	EventRunning  EventPhase = "running"
+	EventFinished EventPhase = "finished"
+)
+
+// PhaseOf menentukan fase event pada waktu at.
+func PhaseOf(ev model.CashbackEvent, at time.Time) EventPhase {
+	switch {
+	case at.Before(ev.StartsAt):
+		return EventUpcoming
+	case at.Before(ev.EndsAt):
+		return EventRunning
+	default:
+		return EventFinished
+	}
+}
+
+// UpdateEvent mengubah event, dengan batas menurut fasenya.
+//
+// Aturannya satu kalimat: masa lalu tidak boleh ditulis ulang. Rate cashback
+// yang sudah terlanjur diberikan pemain dihitung dari jendela event, jadi
+// menggeser jendela yang sudah lewat membuat entry ledger dengan rate 30%
+// berdiri di periode yang menurut daftar event tidak pernah ada eventnya —
+// dan tidak ada cara memeriksanya lagi setelah itu.
+//
+// Maka:
+//   - belum mulai  : nama dan jendela bebas diubah
+//   - sedang jalan : hanya endsAt, dan tidak boleh mundur ke masa lalu
+//   - sudah selesai: tidak bisa diubah sama sekali
+func (s *Cashback) UpdateEvent(ctx context.Context, eventID string, in UpdateEventInput) (model.CashbackEvent, error) {
+	ev, err := s.cashback.EventByID(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return model.CashbackEvent{}, apierr.NotFound("event_not_found", "Event tidak ditemukan")
+		}
+		return model.CashbackEvent{}, err
+	}
+
+	now := s.now()
+	phase := PhaseOf(ev, now)
+	if phase == EventFinished {
+		return model.CashbackEvent{}, apierr.Conflict("event_finished",
+			"Event yang sudah selesai tidak bisa diubah")
+	}
+	if phase == EventRunning && (in.Name != nil || in.StartsAt != nil) {
+		return model.CashbackEvent{}, apierr.Conflict("event_running",
+			"Event yang sedang berjalan hanya boleh diubah waktu selesainya")
+	}
+
+	draft := ev
+	if in.Name != nil {
+		draft.Name = strings.TrimSpace(*in.Name)
+	}
+	if in.StartsAt != nil {
+		draft.StartsAt = in.StartsAt.UTC()
+	}
+	if in.EndsAt != nil {
+		draft.EndsAt = in.EndsAt.UTC()
+	}
+
+	if !draft.EndsAt.After(draft.StartsAt) {
+		return model.CashbackEvent{}, apierr.Unprocessable("invalid_window", "endsAt harus setelah startsAt")
+	}
+	// Jendela baru tidak boleh berakhir di masa lalu: itu sama dengan menyatakan
+	// bonus pernah berlaku pada periode yang sudah lewat.
+	if draft.EndsAt.Before(now) {
+		return model.CashbackEvent{}, apierr.Unprocessable("window_in_past",
+			"endsAt tidak boleh di masa lalu")
+	}
+	if phase == EventUpcoming && draft.StartsAt.Before(now) {
+		return model.CashbackEvent{}, apierr.Unprocessable("window_in_past",
+			"startsAt tidak boleh di masa lalu")
+	}
+
+	if err := s.cashback.UpdateEvent(ctx, draft); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return model.CashbackEvent{}, apierr.NotFound("event_not_found", "Event tidak ditemukan")
+		}
+		return model.CashbackEvent{}, err
+	}
+	return draft, nil
+}
+
+// DeleteEvent membatalkan event yang BELUM mulai.
+//
+// Event yang sudah berjalan atau selesai tidak bisa dihapus dengan alasan yang
+// sama seperti UpdateEvent: barisnya adalah penjelasan atas rate yang sudah
+// terlanjur diberikan. Untuk menghentikan event yang sedang berjalan, majukan
+// endsAt-nya lewat PATCH.
+func (s *Cashback) DeleteEvent(ctx context.Context, eventID string) error {
+	ev, err := s.cashback.EventByID(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return apierr.NotFound("event_not_found", "Event tidak ditemukan")
+		}
+		return err
+	}
+
+	if phase := PhaseOf(ev, s.now()); phase != EventUpcoming {
+		return apierr.Conflict("event_started",
+			"Event yang sudah mulai tidak bisa dihapus; majukan endsAt untuk menghentikannya")
+	}
+
+	if err := s.cashback.DeleteEvent(ctx, eventID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return apierr.NotFound("event_not_found", "Event tidak ditemukan")
+		}
+		return err
+	}
+	return nil
 }
 
 // ListEvents mengembalikan event yang masih berjalan atau akan datang.

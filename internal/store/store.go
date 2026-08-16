@@ -16,6 +16,10 @@ import (
 // ErrNotFound dikembalikan saat baris tidak ada.
 var ErrNotFound = errors.New("store: baris tidak ditemukan")
 
+// ErrConflict dikembalikan saat baris bentrok dengan yang sudah ada, mis.
+// email operator dashboard yang sudah terpakai.
+var ErrConflict = errors.New("store: baris sudah ada")
+
 // ErrIdempotencyConflict dikembalikan saat penulisan kalah balapan dengan
 // permintaan lain yang memakai kunci idempotensi sama. Pemanggil sebaiknya
 // membaca ulang baris pemenang, bukan menganggapnya gagal.
@@ -142,10 +146,59 @@ type APIKeys interface {
 	// Revoke menandai kunci dicabut. Idempoten: mencabut kunci yang sudah
 	// dicabut bukan error, karena hasil akhirnya sama.
 	Revoke(ctx context.Context, keyID string, at time.Time) error
+	// Update mengubah nama dan/atau masa berlaku kunci. Rahasianya tidak ikut
+	// berubah — kunci yang sama tetap berlaku dengan atribut baru.
+	Update(ctx context.Context, keyID string, name string, expiresAt *time.Time) error
+	// Delete menghapus baris kunci sepenuhnya. Berbeda dari Revoke, yang
+	// menyisakan jejak: pemakaian terakhir dan alasan pencabutan ikut hilang.
+	Delete(ctx context.Context, keyID string) error
 	// TouchLastUsed mencatat pemakaian terakhir. Kegagalannya tidak boleh
 	// menggagalkan request — ini catatan operasional, bukan bagian keputusan
 	// autentikasi.
 	TouchLastUsed(ctx context.Context, keyID string, at time.Time) error
+}
+
+// DashboardUsers menyimpan operator dashboard beserta sesi loginnya.
+//
+// Sesi ikut di sini, bukan di interface sendiri, karena keduanya selalu
+// dipakai bersama dalam satu alur: login membaca user lalu membuat sesi, dan
+// tiap request membaca sesi lalu user-nya.
+type DashboardUsers interface {
+	// ByEmail mencari user untuk login. Email dibandingkan huruf kecil.
+	ByEmail(ctx context.Context, email string) (auth.User, error)
+	// ByID mengembalikan user, termasuk yang sudah dinonaktifkan.
+	ByID(ctx context.Context, userID string) (auth.User, error)
+	// Create menyimpan operator baru.
+	Create(ctx context.Context, user auth.User) error
+	// List mengembalikan seluruh operator, terbaru dulu.
+	List(ctx context.Context) ([]auth.User, error)
+	// SetDisabled menonaktifkan atau mengaktifkan kembali operator. at nil
+	// berarti diaktifkan lagi.
+	SetDisabled(ctx context.Context, userID string, at *time.Time) error
+	// SetPassword mengganti hash kata sandi.
+	SetPassword(ctx context.Context, userID, passwordHash string) error
+	// UpdateProfile mengganti email dan nama tampilan operator. Email yang
+	// sudah dipakai operator lain mengembalikan ErrConflict.
+	UpdateProfile(ctx context.Context, userID, email, name string) error
+	// Delete menghapus operator beserta seluruh sesinya.
+	Delete(ctx context.Context, userID string) error
+	// TouchLastLogin mencatat login terakhir. Kegagalannya tidak boleh
+	// menggagalkan login — ini catatan operasional.
+	TouchLastLogin(ctx context.Context, userID string, at time.Time) error
+
+	// CreateSession menyimpan sesi baru.
+	CreateSession(ctx context.Context, session auth.Session) error
+	// SessionByID mengembalikan sesi apa adanya, termasuk yang dicabut atau
+	// kedaluwarsa: pemanggil yang memutuskan, supaya alasan penolakan bisa
+	// dicatat tanpa membocorkannya ke klien.
+	SessionByID(ctx context.Context, sessionID string) (auth.Session, error)
+	// RevokeSession mematikan satu sesi. Idempoten.
+	RevokeSession(ctx context.Context, sessionID string, at time.Time) error
+	// RevokeUserSessions mematikan seluruh sesi milik satu user — dipakai saat
+	// operator dinonaktifkan atau kata sandinya diganti.
+	RevokeUserSessions(ctx context.Context, userID string, at time.Time) error
+	// TouchSession mencatat pemakaian terakhir sesi.
+	TouchSession(ctx context.Context, sessionID string, at time.Time) error
 }
 
 // Transactions menyimpan TRANSACTION dan TRANSACTION_ITEM.
@@ -156,6 +209,10 @@ type Transactions interface {
 	ByIdempotencyKey(ctx context.Context, key string) (model.Transaction, bool)
 	// ListByUser mengembalikan riwayat transaksi pemain, terbaru dulu.
 	ListByUser(ctx context.Context, userID int64, after *paging.KeysetCursor, limit int) ([]model.Transaction, bool, error)
+	// List mengembalikan transaksi SELURUH pemain, terbaru dulu. Dipakai
+	// dashboard internal yang memantau arus transaksi apa adanya, bukan
+	// riwayat satu pemain.
+	List(ctx context.Context, after *paging.KeysetCursor, limit int) ([]model.Transaction, bool, error)
 }
 
 // Templates menyimpan BODY_TEMPLATE — registry rig yang sudah di-upload ke Roblox.

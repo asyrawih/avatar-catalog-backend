@@ -51,17 +51,29 @@ func run() error {
 		return err
 	}
 
+	// Login dashboard berdiri di samping kunci API: SessionAuth memeriksa
+	// cookie sesi lebih dulu, lalu jatuh ke kunci. Cookie ditandai Secure di
+	// mana pun kecuali development, karena di luar itu dashboard selalu
+	// dilayani lewat HTTPS.
+	dashboardAuth := service.NewDashboardAuth(backend.dashUsers)
+	cookieSecure := cfg.Env != "development"
+	authenticator = httpapi.NewSessionAuth(dashboardAuth, authenticator,
+		httpapi.NewCookieConfig(cookieSecure), logger)
+
 	cashback := service.NewCashback(backend.cashback)
 	deps := httpapi.Deps{
-		Outfits:      service.NewOutfits(backend.outfits, backend.templates),
-		Transactions: service.NewTransactions(backend.transactions, cashback),
-		Cashback:     cashback,
-		Templates:    service.NewTemplates(backend.templates),
-		Idempotency:  backend.idempotency,
-		Auth:         authenticator,
-		RateLimit:    newRateLimiter(cfg, logger),
-		Logger:       logger,
-		Readiness:    backend.readiness,
+		Outfits:       service.NewOutfits(backend.outfits, backend.templates),
+		Transactions:  service.NewTransactions(backend.transactions, cashback),
+		Cashback:      cashback,
+		Templates:     service.NewTemplates(backend.templates),
+		APIKeys:       service.NewAPIKeys(backend.apiKeys),
+		DashboardAuth: dashboardAuth,
+		CookieSecure:  cookieSecure,
+		Idempotency:   backend.idempotency,
+		Auth:          authenticator,
+		RateLimit:     newRateLimiter(cfg, logger),
+		Logger:        logger,
+		Readiness:     backend.readiness,
 	}
 
 	srv := &http.Server{
@@ -121,6 +133,7 @@ type backend struct {
 	cashback     store.Cashback
 	templates    store.Templates
 	apiKeys      store.APIKeys
+	dashUsers    store.DashboardUsers
 	idempotency  idempotency.Store
 	readiness    map[string]func(context.Context) error
 	closers      []func()
@@ -173,6 +186,7 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		b.cashback = postgres.NewCashback(pool)
 		b.templates = postgres.NewTemplates(pool)
 		b.apiKeys = postgres.NewAPIKeys(pool)
+		b.dashUsers = postgres.NewDashboardUsers(pool)
 		b.readiness["postgres"] = pool.Ping
 		b.closers = append(b.closers, pool.Close)
 		logger.Info("penyimpanan postgres aktif", "max_conns", cfg.DBMaxConns)
@@ -189,6 +203,7 @@ func openBackend(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		b.cashback = store.NewMemoryCashback(txStore)
 		b.templates = templateStore
 		b.apiKeys = store.NewMemoryAPIKeys()
+		b.dashUsers = store.NewMemoryDashboardUsers()
 		logger.Warn("penyimpanan in-memory aktif", "catatan", "data hilang saat proses berhenti; isi DATABASE_URL untuk memakai postgres")
 	}
 

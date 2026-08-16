@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -122,6 +123,48 @@ func (s *MemoryCashback) ListEntries(_ context.Context, userID int64, after *pag
 	return truncate(matched, limit)
 }
 
+// ListBalances merangkum ledger per pemain, aktivitas terbaru dulu.
+func (s *MemoryCashback) ListBalances(_ context.Context, after *paging.KeysetCursor, limit int) ([]UserBalance, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	byUser := make(map[int64]*UserBalance)
+	for _, e := range s.entries {
+		row, ok := byUser[e.UserID]
+		if !ok {
+			row = &UserBalance{UserID: e.UserID}
+			byUser[e.UserID] = row
+		}
+		row.Balance += e.Amount
+		row.EntryCount++
+		switch e.Kind {
+		case model.CashbackAccrual:
+			row.Accrued += e.Amount
+		case model.CashbackRedeem:
+			// amount redeem tersimpan negatif; daftar menampilkannya positif.
+			row.Redeemed -= e.Amount
+		case model.CashbackReversal:
+			row.Reversed -= e.Amount
+		}
+		if e.CreatedAt.After(row.LastEntryAt) {
+			row.LastEntryAt = e.CreatedAt
+		}
+	}
+
+	matched := make([]UserBalance, 0, len(byUser))
+	for _, row := range byUser {
+		if after != nil && !after.After(row.LastEntryAt, strconv.FormatInt(row.UserID, 10)) {
+			continue
+		}
+		matched = append(matched, *row)
+	}
+	sortByRecency(matched, func(b UserBalance) (time.Time, string) {
+		return b.LastEntryAt, strconv.FormatInt(b.UserID, 10)
+	})
+
+	return truncate(matched, limit)
+}
+
 // CreateRedeem menyimpan request pending plus baris pemotong saldo sekaligus.
 func (s *MemoryCashback) CreateRedeem(_ context.Context, r model.RedeemRequest, deduct model.CashbackEntry) error {
 	s.mu.Lock()
@@ -235,6 +278,42 @@ func (s *MemoryCashback) ListEvents(_ context.Context, from time.Time) ([]model.
 		return out[i].StartsAt.Before(out[j].StartsAt)
 	})
 	return out, nil
+}
+
+// EventByID mengembalikan satu event.
+func (s *MemoryCashback) EventByID(_ context.Context, eventID string) (model.CashbackEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ev, ok := s.events[eventID]
+	if !ok {
+		return model.CashbackEvent{}, ErrNotFound
+	}
+	return ev, nil
+}
+
+// UpdateEvent menimpa nama dan jendela sebuah event.
+func (s *MemoryCashback) UpdateEvent(_ context.Context, ev model.CashbackEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.events[ev.EventID]; !ok {
+		return ErrNotFound
+	}
+	s.events[ev.EventID] = ev
+	return nil
+}
+
+// DeleteEvent menghapus event.
+func (s *MemoryCashback) DeleteEvent(_ context.Context, eventID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.events[eventID]; !ok {
+		return ErrNotFound
+	}
+	delete(s.events, eventID)
+	return nil
 }
 
 // Totals mengagregat ledger pada rentang [from, to).

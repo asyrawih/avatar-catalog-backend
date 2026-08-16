@@ -41,6 +41,7 @@ func newAuthServer(t *testing.T) *authFixture {
 		Transactions: service.NewTransactions(transactions, cashback),
 		Cashback:     cashback,
 		Templates:    service.NewTemplates(templates),
+		APIKeys:      service.NewAPIKeys(keys),
 		Idempotency:  idempotency.NewMemoryStore(time.Hour),
 		Auth:         httpapi.NewKeyAuth(keys, logger),
 		Logger:       logger,

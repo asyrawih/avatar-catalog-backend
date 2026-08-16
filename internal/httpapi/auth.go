@@ -54,6 +54,13 @@ func errUnauthenticated() error {
 	return apierr.Unauthorized("unauthenticated", "Kunci API tidak valid")
 }
 
+// errActorForbidden dipakai kunci maupun sesi yang mencoba bertindak atas nama
+// pemain tanpa scope actor:assert.
+func errActorForbidden() error {
+	return apierr.Forbidden("actor_assert_forbidden",
+		"Kredensial ini tidak boleh bertindak atas nama pemain")
+}
+
 // KeyAuth memverifikasi Bearer token terhadap kunci yang tersimpan.
 type KeyAuth struct {
 	keys   store.APIKeys
@@ -123,8 +130,7 @@ func (a *KeyAuth) Authenticate(r *http.Request) (Caller, error) {
 		// scope ini, kunci dashboard atau AI yang bocor tetap tidak bisa
 		// menyukai, menukar cashback, atau membuat outfit atas nama siapa pun.
 		if !caller.Has(auth.ScopeActorAssert) {
-			return Caller{}, apierr.Forbidden("actor_assert_forbidden",
-				"Kunci ini tidak boleh bertindak atas nama pemain")
+			return Caller{}, errActorForbidden()
 		}
 		caller.Actor = actor
 	}

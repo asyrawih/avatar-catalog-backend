@@ -9,10 +9,20 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+# CLI operasional ikut dibawa: menerbitkan kunci dan membuat operator dashboard
+# butuh DATABASE_URL, dan satu-satunya tempat kredensial itu sudah ada tanpa
+# perlu disalin ke mana-mana adalah pod ini sendiri.
+#
+#   kubectl exec deploy/avatar-catalog-api -- /app/apikey list
+#   kubectl exec -it deploy/avatar-catalog-api -- /app/dashboarduser create --email you@contoh.com
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/apikey ./cmd/apikey && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/dashboarduser ./cmd/dashboarduser
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/server /app/server
+COPY --from=build /out/apikey /app/apikey
+COPY --from=build /out/dashboarduser /app/dashboarduser
 
 ENV PORT=8080
 EXPOSE 8080

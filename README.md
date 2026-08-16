@@ -298,6 +298,25 @@ Paginasi urutan populer memakai keyset `(count, outfitId)`, bukan
 jadi cursor `mostLiked` yang dipakai di `sort=recent` ditolak `400`
 (`cursor_sort_mismatch`) alih-alih diam-diam mengembalikan halaman ngawur.
 
+### Daftar lintas pemain
+
+Dua endpoint melayani tampilan dashboard yang memantau seluruh pemain
+sekaligus, bukan riwayat satu orang:
+
+- `GET /v1/transactions` **tanpa** `userId` mengembalikan transaksi seluruh
+  pemain, terbaru dulu. Tiap baris membawa `userId`-nya sendiri. Dengan
+  `userId`, daftarnya menyempit seperti sebelumnya.
+- `GET /v1/cashback/balances` merangkum ledger per pemain: `balance`,
+  `accrued`, `redeemed`, `reversed`, `entryCount`, `lastEntryAt`. Agregasinya
+  satu query di Postgres, bukan satu query per pemain.
+
+`ratePercent` sengaja tidak ada di `balances`: menghitungnya butuh riwayat
+belanja tiap pemain satu per satu, dan angka itu baru berarti saat sebuah
+transaksi dinilai. Untuk satu pemain, pakai `GET /v1/cashback/summary`.
+
+Pemain yang belum punya satu pun baris ledger tidak muncul di `balances` —
+bagi cashback, ia memang belum punya apa-apa untuk dilaporkan.
+
 ## Cashback
 
 Cashback dihitung **di backend, bukan di game** — game hanya menampilkan angka
@@ -327,6 +346,28 @@ dikerjakan tim internal di luar sistem ini; hasilnya masuk lewat
 `PATCH /v1/cashback/redeems/{requestId}` (`rejected` mengembalikan potongan).
 Refund/chargeback ditarik lewat `POST /v1/cashback/reversals`; saldo boleh
 minus — itu disengaja.
+
+### Event bonus
+
+`GET`/`POST /v1/cashback/events` ditambah `PATCH` dan `DELETE` per event, semua
+di balik `cashback:admin`. Batasnya mengikuti fase event, dan aturannya satu
+kalimat: **masa lalu tidak boleh ditulis ulang** — rate yang sudah terlanjur
+diberikan pemain dihitung dari jendela event, jadi menggeser jendela yang sudah
+lewat membuat entry ledger berdiri di periode yang menurut daftar tidak pernah
+ada eventnya.
+
+| Fase | Boleh |
+|---|---|
+| `upcoming` | nama dan jendela bebas diubah; boleh dihapus |
+| `running` | hanya `endsAt`, dan tidak boleh mundur ke masa lalu |
+| `finished` | terkunci (`409 event_finished`) |
+
+Menghentikan event yang sedang berjalan dilakukan dengan memajukan `endsAt`,
+bukan `DELETE` (`409 event_started`). Tiap baris membawa `phase`, `editable`,
+dan `deletable` supaya klien tidak perlu menghitung ulang aturannya.
+
+Menjadwalkan jendela di masa lalu tetap boleh — backfill dan penyiapan data uji
+memakainya; yang dijaga hanya perubahan sesudahnya.
 
 ## Rig (templateId)
 
@@ -498,7 +539,13 @@ menjawab `410 outfit_deleted`, bukan `404`.
 
 ## Autentikasi
 
-Setiap request ke `/v1` wajib membawa kunci API:
+Ada dua bentuk kredensial, dan keduanya berlaku di seluruh `/v1`: **kunci API**
+untuk konsumen mesin (Roblox game server, pengambil data AI), dan **login**
+untuk operator dashboard.
+
+### Kunci API
+
+Konsumen mesin membawa kunci di header:
 
 ```
 Authorization: Bearer acb_live_cfwnlwemjelnw_q3tnhfmsofczncrx5kotd7bxyf6ir75...
@@ -538,8 +585,36 @@ Dua pembagian yang paling penting:
   AI yang bocor tetap tidak bisa menyukai atau menukar cashback atas nama siapa
   pun.
 
-Panduan lengkapnya — pemasangan sisi Roblox, rotasi, dan alasan tiap keputusan
-desain — ada di [docs/auth.md](docs/auth.md). Modul Luau-nya di
+### Login dashboard
+
+Operator manusia tidak memakai kunci. Mereka login, dan sesinya dibawa cookie
+`HttpOnly` yang berumur 8 jam:
+
+```
+POST /v1/auth/login     {"email": "...", "password": "..."}
+POST /v1/auth/logout
+GET  /v1/auth/me
+```
+
+Operator dibuat lewat CLI; kata sandi ditanyakan lewat stdin, tidak lewat
+argumen:
+
+```bash
+export DATABASE_URL=postgres://...
+go run ./cmd/dashboarduser create --email you@contoh.com --name "Nama Kamu"
+go run ./cmd/dashboarduser list
+go run ./cmd/dashboarduser disable <userId>
+```
+
+Sesi login membawa **seluruh scope**, termasuk menerbitkan kunci API. Kata
+sandi dihash argon2id (minimal 12 karakter), sesinya tersimpan di Postgres
+supaya logout benar-benar mematikannya, dan menonaktifkan operator langsung
+memutus sesi yang sedang berjalan. Tabelnya dibuat
+[db/init/006_dashboard_user.sql](db/init/006_dashboard_user.sql) — untuk
+database yang sudah berisi, jalankan sendiri dengan `psql`.
+
+Panduan lengkapnya — pemasangan sisi Roblox, rotasi, login dashboard, dan
+alasan tiap keputusan desain — ada di [docs/auth.md](docs/auth.md). Modul Luau-nya di
 [roblox/AvatarCatalog.lua](roblox/AvatarCatalog.lua).
 
 Catatan: audit memori beserta perbaikannya ada di

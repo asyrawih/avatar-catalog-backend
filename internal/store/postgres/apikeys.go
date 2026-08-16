@@ -78,6 +78,32 @@ func (s *APIKeys) Revoke(ctx context.Context, keyID string, at time.Time) error 
 	return nil
 }
 
+// Update mengubah nama dan masa berlaku kunci.
+func (s *APIKeys) Update(ctx context.Context, keyID string, name string, expiresAt *time.Time) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE api_key SET name = $2, expires_at = $3 WHERE key_id = $1`,
+		keyID, name, expiresAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// Delete menghapus baris kunci sepenuhnya.
+func (s *APIKeys) Delete(ctx context.Context, keyID string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM api_key WHERE key_id = $1`, keyID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 // TouchLastUsed mencatat pemakaian terakhir, paling sering sekali per menit per
 // kunci.
 //

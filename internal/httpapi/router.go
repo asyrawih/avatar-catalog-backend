@@ -26,9 +26,24 @@ type Deps struct {
 	Transactions *service.Transactions
 	Cashback     *service.Cashback
 	Templates    *service.Templates
-	Idempotency  idempotency.Store
-	Auth         Authenticator
-	Logger       *slog.Logger
+
+	// DashboardAuth memaparkan /v1/auth — login operator dashboard. nil berarti
+	// backend hanya menerima kunci API.
+	DashboardAuth *service.DashboardAuth
+
+	// CookieSecure menandai cookie sesi sebagai Secure dan memakai awalan
+	// __Host-. Wajib true di produksi; false hanya supaya http://localhost
+	// tetap bisa dipakai saat pengembangan.
+	CookieSecure bool
+
+	// APIKeys memaparkan /v1/keys. nil berarti manajemen kunci hanya lewat
+	// CLI apikey — dan itu pilihan yang sah untuk deployment yang tidak mau
+	// jalur penerbitan kredensial terbuka lewat HTTP sama sekali.
+	APIKeys *service.APIKeys
+
+	Idempotency idempotency.Store
+	Auth        Authenticator
+	Logger      *slog.Logger
 
 	// RateLimit membatasi request per kunci API. nil berarti tanpa pembatas.
 	RateLimit Limiter
@@ -64,6 +79,24 @@ func NewRouter(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealth)
 	mux.HandleFunc("GET /readyz", handleReady(deps.Readiness))
+
+	// Login juga TIDAK boleh butuh kredensial — ia yang menerbitkannya. Sama
+	// dengan probe kesehatan, rutenya duduk di mux luar; /v1/auth/me dan logout
+	// ikut di sini karena keduanya harus tetap menjawab rapi saat sesinya sudah
+	// mati, bukan ditolak lebih dulu oleh middleware autentikasi.
+	//
+	// Yang menahan tebakan kata sandi di sini bukan pembatas request melainkan
+	// argon2id-nya sendiri: satu verifikasi memakan 19 MiB dan dua iterasi,
+	// jadi percobaan massal mahal bagi penebaknya. Kalau nanti login dibuka ke
+	// internet luas, tambahkan pembatas per-IP di ingress.
+	var cookie cookieConfig
+	if deps.DashboardAuth != nil {
+		cookie = NewCookieConfig(deps.CookieSecure)
+		dashboardAuth := &dashboardAuthHandler{dashboard: deps.DashboardAuth, cookie: cookie}
+		mux.HandleFunc("POST /v1/auth/login", dashboardAuth.login)
+		mux.HandleFunc("POST /v1/auth/logout", dashboardAuth.logout)
+		mux.HandleFunc("GET /v1/auth/me", dashboardAuth.me)
+	}
 
 	// Semuanya di bawah ini butuh kunci. Urutannya: autentikasi dulu, baru
 	// pembatas — pembatas memakai keyId sebagai kunci hitungannya, jadi ia
@@ -125,13 +158,54 @@ func NewRouter(deps Deps) http.Handler {
 		cashback := &cashbackHandler{cashback: deps.Cashback}
 		route(api, "GET /v1/cashback/summary", cashback.summary, auth.ScopeCashbackRead)
 		route(api, "GET /v1/cashback/entries", cashback.listEntries, auth.ScopeCashbackRead)
+		// Daftar lintas pemain. Di balik cashback:read seperti summary — isinya
+		// angka yang sama, hanya untuk banyak pemain sekaligus.
+		route(api, "GET /v1/cashback/balances", cashback.listBalances, auth.ScopeCashbackRead)
 		route(api, "POST /v1/cashback/redeems", cashback.createRedeem, auth.ScopeCashbackRedeem)
 		route(api, "GET /v1/cashback/redeems", cashback.listRedeems, auth.ScopeCashbackRead)
 		route(api, "PATCH /v1/cashback/redeems/{requestId}", cashback.resolveRedeem, auth.ScopeCashbackAdmin)
 		route(api, "POST /v1/cashback/reversals", cashback.createReversal, auth.ScopeCashbackAdmin)
 		route(api, "GET /v1/cashback/events", cashback.listEvents, auth.ScopeCashbackRead)
 		route(api, "POST /v1/cashback/events", cashback.createEvent, auth.ScopeCashbackAdmin)
+		// Event yang belum mulai bebas diubah dan dihapus; yang sedang berjalan
+		// hanya waktu selesainya; yang sudah lewat terkunci. Aturannya di
+		// service.Cashback — lihat UpdateEvent.
+		route(api, "PATCH /v1/cashback/events/{eventId}", cashback.updateEvent, auth.ScopeCashbackAdmin)
+		route(api, "DELETE /v1/cashback/events/{eventId}", cashback.removeEvent, auth.ScopeCashbackAdmin)
 		route(api, "GET /v1/cashback/reconciliation", cashback.reconciliation, auth.ScopeCashbackAdmin)
+	}
+
+	// Kunci API. Seluruhnya di balik satu scope, keys:admin, yang tidak masuk
+	// role mana pun — pemegangnya bisa mencetak kunci dengan scope apa saja,
+	// termasuk keys:admin lagi, jadi ia setara akses penuh dan harus diminta
+	// secara sadar.
+	//
+	// "roles" terdaftar sebelum {keyId} secara makna: mux Go 1.22 memilih pola
+	// literal di atas wildcard, jadi tidak bentrok. Bedanya, GET /v1/keys/roles
+	// tidak menyentuh database sama sekali — isinya konstanta paket auth.
+	if deps.APIKeys != nil {
+		keys := &apiKeyHandler{keys: deps.APIKeys}
+		route(api, "GET /v1/keys", keys.list, auth.ScopeKeysAdmin)
+		route(api, "GET /v1/keys/roles", keys.listRoles, auth.ScopeKeysAdmin)
+		route(api, "POST /v1/keys", keys.create, auth.ScopeKeysAdmin,
+			idempotent(deps.Idempotency, "keys.create", false))
+		route(api, "PATCH /v1/keys/{keyId}", keys.update, auth.ScopeKeysAdmin)
+		// DELETE mencabut; ?hard=true menghapus barisnya. Pencabutan yang jadi
+		// bawaan karena itu yang benar hampir selalu — jejak kunci yang pernah
+		// dipakai justru yang dicari saat menelusuri insiden.
+		route(api, "DELETE /v1/keys/{keyId}", keys.remove, auth.ScopeKeysAdmin)
+	}
+
+	// Manajemen operator dashboard. Di balik keys:admin, scope yang sama dengan
+	// penerbitan kunci API: keduanya sama-sama membuat kredensial baru, dan
+	// memisahkannya jadi dua scope hanya akan membuat satu di antaranya
+	// diberikan tanpa disadari bersama yang lain.
+	if deps.DashboardAuth != nil {
+		dashboardAuth := &dashboardAuthHandler{dashboard: deps.DashboardAuth, cookie: cookie}
+		route(api, "GET /v1/auth/users", dashboardAuth.listUsers, auth.ScopeKeysAdmin)
+		route(api, "POST /v1/auth/users", dashboardAuth.createUser, auth.ScopeKeysAdmin)
+		route(api, "PATCH /v1/auth/users/{userId}", dashboardAuth.updateUser, auth.ScopeKeysAdmin)
+		route(api, "DELETE /v1/auth/users/{userId}", dashboardAuth.removeUser, auth.ScopeKeysAdmin)
 	}
 
 	api.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {

@@ -39,6 +39,14 @@ const (
 	// sebagai pemain mana pun. Hanya game server yang boleh memilikinya, karena
 	// hanya dia yang tahu pemain mana yang benar-benar sedang bermain.
 	ScopeActorAssert Scope = "actor:assert"
+	// ScopeKeysAdmin menerbitkan, melihat, dan mencabut kunci API lewat
+	// /v1/keys.
+	//
+	// Sengaja berdiri sendiri dan tidak masuk role mana pun: pemegangnya bisa
+	// mencetak kunci dengan scope apa saja, termasuk keys:admin lagi, jadi ia
+	// setara akses penuh ke seluruh API. Kunci yang memilikinya harus punya
+	// masa berlaku dan tidak dipegang proses yang berjalan terus.
+	ScopeKeysAdmin Scope = "keys:admin"
 )
 
 // AllScopes adalah seluruh scope yang dikenali, dipakai untuk memvalidasi
@@ -47,7 +55,7 @@ var AllScopes = []Scope{
 	ScopeCatalogRead, ScopeCatalogWrite,
 	ScopeTransactionsWrite, ScopeTransactionsRead,
 	ScopeCashbackRead, ScopeCashbackRedeem, ScopeCashbackAdmin,
-	ScopeActorAssert,
+	ScopeActorAssert, ScopeKeysAdmin,
 }
 
 // Role adalah paket scope siap pakai untuk satu jenis konsumen.
@@ -78,6 +86,12 @@ var Roles = map[string][]Scope{
 	// public-read: calon API publik. Serendah mungkin: baca katalog saja.
 	"public-read": {
 		ScopeCatalogRead,
+	},
+	// keys-admin: penerbit kunci. Berdiri sendiri dan sengaja tidak digabung
+	// ke dashboard — kunci yang bisa mencetak kunci lain sebaiknya berumur
+	// pendek dan dipegang orang, bukan menempel di tool yang menyala terus.
+	"keys-admin": {
+		ScopeKeysAdmin,
 	},
 }
 

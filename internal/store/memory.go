@@ -462,6 +462,23 @@ func (s *MemoryTransactions) ListByUser(_ context.Context, userID int64, after *
 	return truncate(matched, limit)
 }
 
+// List mengembalikan transaksi seluruh pemain, terbaru dulu.
+func (s *MemoryTransactions) List(_ context.Context, after *paging.KeysetCursor, limit int) ([]model.Transaction, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	matched := make([]model.Transaction, 0, len(s.rows))
+	for _, tx := range s.rows {
+		if after != nil && !after.After(tx.OccurredAt, tx.TxID) {
+			continue
+		}
+		matched = append(matched, cloneTransaction(tx))
+	}
+	sortByRecency(matched, func(tx model.Transaction) (time.Time, string) { return tx.OccurredAt, tx.TxID })
+
+	return truncate(matched, limit)
+}
+
 // --- BODY_TEMPLATE --------------------------------------------------------
 
 // MemoryTemplates adalah implementasi in-memory dari Templates.

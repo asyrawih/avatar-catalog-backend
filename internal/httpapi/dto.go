@@ -339,7 +339,11 @@ func newTxCreated(tx model.Transaction) txCreatedDTO {
 }
 
 type txSummaryDTO struct {
-	TxID       string    `json:"txId"`
+	TxID string `json:"txId"`
+	// userId selalu ikut, juga pada daftar per pemain: daftar lintas pemain
+	// tidak berguna tanpanya, dan bentuk yang berubah-ubah antar dua mode
+	// pemanggilan lebih merepotkan klien daripada satu field berlebih.
+	UserID     int64     `json:"userId"`
 	Status     string    `json:"status"`
 	RobuxTotal int       `json:"robuxTotal"`
 	ItemCount  int       `json:"itemCount"`
@@ -351,6 +355,7 @@ func newTxSummaries(rows []model.Transaction) []txSummaryDTO {
 	for _, tx := range rows {
 		out = append(out, txSummaryDTO{
 			TxID:       tx.TxID,
+			UserID:     tx.UserID,
 			Status:     tx.Status,
 			RobuxTotal: tx.RobuxTotal(),
 			ItemCount:  len(tx.Items),

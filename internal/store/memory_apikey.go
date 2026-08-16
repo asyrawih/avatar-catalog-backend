@@ -75,6 +75,33 @@ func (s *MemoryAPIKeys) Revoke(_ context.Context, keyID string, at time.Time) er
 	return nil
 }
 
+// Update mengubah nama dan masa berlaku kunci.
+func (s *MemoryAPIKeys) Update(_ context.Context, keyID string, name string, expiresAt *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key, ok := s.rows[keyID]
+	if !ok {
+		return ErrNotFound
+	}
+	key.Name = name
+	key.ExpiresAt = expiresAt
+	s.rows[keyID] = key
+	return nil
+}
+
+// Delete menghapus baris kunci sepenuhnya.
+func (s *MemoryAPIKeys) Delete(_ context.Context, keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.rows[keyID]; !ok {
+		return ErrNotFound
+	}
+	delete(s.rows, keyID)
+	return nil
+}
+
 // TouchLastUsed mencatat pemakaian terakhir.
 func (s *MemoryAPIKeys) TouchLastUsed(_ context.Context, keyID string, at time.Time) error {
 	s.mu.Lock()

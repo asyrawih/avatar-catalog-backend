@@ -134,6 +134,65 @@ func (s *Cashback) Balance(ctx context.Context, userID int64) (int, error) {
 	return total, err
 }
 
+// ListBalances merangkum ledger per pemain, aktivitas terbaru dulu.
+//
+// Agregasinya dikerjakan Postgres dalam satu query, bukan dengan memanggil
+// Balance sekali per pemain: yang kedua berarti satu round-trip per baris
+// daftar, dan daftar ini justru ada supaya seluruh pemain bisa dilihat
+// sekaligus.
+//
+// Keyset-nya (last_entry_at, user_id) disaring di luar agregat lewat subquery —
+// kolom hasil MAX() tidak bisa dipakai di WHERE pada level yang sama.
+func (s *Cashback) ListBalances(ctx context.Context, after *paging.KeysetCursor, limit int) ([]store.UserBalance, bool, error) {
+	var (
+		cursorAt time.Time
+		cursorID string
+	)
+	if after != nil {
+		cursorAt, cursorID = after.At, after.ID
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id, balance, accrued, redeemed, reversed, entry_count, last_entry_at
+		FROM (
+			SELECT user_id,
+			       SUM(amount)                                        AS balance,
+			       COALESCE(SUM(amount) FILTER (WHERE kind = 'accrual'), 0)   AS accrued,
+			       COALESCE(-SUM(amount) FILTER (WHERE kind = 'redeem'), 0)   AS redeemed,
+			       COALESCE(-SUM(amount) FILTER (WHERE kind = 'reversal'), 0) AS reversed,
+			       COUNT(*)                                           AS entry_count,
+			       MAX(created_at)                                    AS last_entry_at
+			FROM cashback_entry
+			GROUP BY user_id
+		) AS ringkasan
+		WHERE ($1::timestamptz IS NULL
+		       OR last_entry_at < $1
+		       OR (last_entry_at = $1 AND user_id::text > $2))
+		ORDER BY last_entry_at DESC, user_id::text ASC
+		LIMIT $3`,
+		nullableTime(after, cursorAt), cursorID, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	out := make([]store.UserBalance, 0, limit+1)
+	for rows.Next() {
+		var row store.UserBalance
+		if err := rows.Scan(&row.UserID, &row.Balance, &row.Accrued, &row.Redeemed,
+			&row.Reversed, &row.EntryCount, &row.LastEntryAt); err != nil {
+			return nil, false, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	balances, hasMore := trimPage(out, limit)
+	return balances, hasMore, nil
+}
+
 // ListEntries mengembalikan satu halaman ledger pemain, terbaru dulu.
 func (s *Cashback) ListEntries(ctx context.Context, userID int64, after *paging.KeysetCursor, limit int) ([]model.CashbackEntry, bool, error) {
 	var (
@@ -340,6 +399,46 @@ func (s *Cashback) ListEvents(ctx context.Context, from time.Time) ([]model.Cash
 		events = append(events, ev)
 	}
 	return events, rows.Err()
+}
+
+// EventByID mengembalikan satu event.
+func (s *Cashback) EventByID(ctx context.Context, eventID string) (model.CashbackEvent, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT event_id, name, starts_at, ends_at
+		FROM cashback_event WHERE event_id = $1`, eventID)
+
+	var ev model.CashbackEvent
+	err := row.Scan(&ev.EventID, &ev.Name, &ev.StartsAt, &ev.EndsAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.CashbackEvent{}, store.ErrNotFound
+	}
+	return ev, err
+}
+
+// UpdateEvent menimpa nama dan jendela sebuah event.
+func (s *Cashback) UpdateEvent(ctx context.Context, ev model.CashbackEvent) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE cashback_event SET name = $2, starts_at = $3, ends_at = $4
+		WHERE event_id = $1`, ev.EventID, ev.Name, ev.StartsAt, ev.EndsAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// DeleteEvent menghapus event.
+func (s *Cashback) DeleteEvent(ctx context.Context, eventID string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM cashback_event WHERE event_id = $1`, eventID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 // Totals mengagregat ledger pada rentang [from, to).

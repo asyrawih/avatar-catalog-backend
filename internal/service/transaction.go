@@ -141,11 +141,10 @@ func (s *Transactions) accrueCashback(ctx context.Context, tx model.Transaction)
 }
 
 // List mengembalikan riwayat transaksi pemain, terbaru dulu.
+// List mengembalikan satu halaman transaksi. userID 0 berarti SELURUH pemain —
+// itulah tampilan yang dipakai dashboard internal, sedangkan game server selalu
+// mengirimkan userId pemain yang sedang dilayaninya.
 func (s *Transactions) List(ctx context.Context, userID int64, rawCursor string, limit int) (TransactionPage, error) {
-	if userID <= 0 {
-		return TransactionPage{}, apierr.BadRequest("missing_user_id", "Parameter userId wajib diisi")
-	}
-
 	var cursor paging.KeysetCursor
 	present, err := paging.Decode(rawCursor, &cursor)
 	if err != nil {
@@ -157,7 +156,15 @@ func (s *Transactions) List(ctx context.Context, userID int64, rawCursor string,
 	}
 
 	limit = paging.ClampLimit(limit, DefaultPageSize, MaxPageSize)
-	rows, hasMore, err := s.transactions.ListByUser(ctx, userID, after, limit)
+	var (
+		rows    []model.Transaction
+		hasMore bool
+	)
+	if userID > 0 {
+		rows, hasMore, err = s.transactions.ListByUser(ctx, userID, after, limit)
+	} else {
+		rows, hasMore, err = s.transactions.List(ctx, after, limit)
+	}
 	if err != nil {
 		return TransactionPage{}, err
 	}

@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/hanan/avatar-catalog-backend/internal/apierr"
+
 	"github.com/hanan/avatar-catalog-backend/internal/model"
 	"github.com/hanan/avatar-catalog-backend/internal/service"
 )
@@ -61,6 +63,28 @@ type cashbackEventDTO struct {
 	StartsAt time.Time `json:"startsAt"`
 	EndsAt   time.Time `json:"endsAt"`
 	Active   bool      `json:"active"`
+	// phase memberi tahu klien apa yang boleh dilakukan pada baris ini tanpa
+	// menghitung ulang perbandingan waktu sendiri: upcoming bebas diubah dan
+	// dihapus, running hanya endsAt, finished terkunci.
+	Phase string `json:"phase"`
+	// editable dan deletable adalah kesimpulan dari phase, ditulis eksplisit
+	// supaya tombol di UI tidak perlu menerjemahkan aturan backend.
+	Editable  bool `json:"editable"`
+	Deletable bool `json:"deletable"`
+}
+
+func newCashbackEvent(ev model.CashbackEvent, now time.Time) cashbackEventDTO {
+	phase := service.PhaseOf(ev, now)
+	return cashbackEventDTO{
+		EventID:   ev.EventID,
+		Name:      ev.Name,
+		StartsAt:  ev.StartsAt,
+		EndsAt:    ev.EndsAt,
+		Active:    ev.Active(now),
+		Phase:     string(phase),
+		Editable:  phase != service.EventFinished,
+		Deletable: phase == service.EventUpcoming,
+	}
 }
 
 func newCashbackBonuses(bonuses []service.CashbackBonus) []cashbackBonusDTO {
@@ -129,6 +153,48 @@ func (h *cashbackHandler) summary(w http.ResponseWriter, r *http.Request) {
 		out.PendingRedeem = &pending
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type userBalanceDTO struct {
+	UserID      int64     `json:"userId"`
+	Balance     int       `json:"balance"`
+	Accrued     int       `json:"accrued"`
+	Redeemed    int       `json:"redeemed"`
+	Reversed    int       `json:"reversed"`
+	EntryCount  int       `json:"entryCount"`
+	LastEntryAt time.Time `json:"lastEntryAt"`
+}
+
+// listBalances menangani GET /v1/cashback/balances — ringkasan cashback
+// SELURUH pemain, untuk tampilan daftar di dashboard. Pemain tanpa satu pun
+// baris ledger tidak muncul: bagi cashback, pemain yang belum pernah
+// berbelanja belum punya apa-apa untuk dilaporkan.
+func (h *cashbackHandler) listBalances(w http.ResponseWriter, r *http.Request) {
+	limit, err := queryInt(r, "limit", 0)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	page, err := h.cashback.ListBalances(r.Context(), r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	out := make([]userBalanceDTO, 0, len(page.Balances))
+	for _, row := range page.Balances {
+		out = append(out, userBalanceDTO{
+			UserID:      row.UserID,
+			Balance:     row.Balance,
+			Accrued:     row.Accrued,
+			Redeemed:    row.Redeemed,
+			Reversed:    row.Reversed,
+			EntryCount:  row.EntryCount,
+			LastEntryAt: row.LastEntryAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, newListEnvelope(out, page.NextCursor, page.HasMore))
 }
 
 // listEntries menangani GET /v1/cashback/entries — ledger append-only per
@@ -278,13 +344,48 @@ func (h *cashbackHandler) createEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, cashbackEventDTO{
-		EventID:  ev.EventID,
-		Name:     ev.Name,
-		StartsAt: ev.StartsAt,
-		EndsAt:   ev.EndsAt,
-		Active:   ev.Active(time.Now().UTC()),
+	w.Header().Set("Location", "/v1/cashback/events/"+ev.EventID)
+	writeJSON(w, http.StatusCreated, newCashbackEvent(ev, time.Now().UTC()))
+}
+
+type updateEventBody struct {
+	// Semua opsional; nil berarti tidak diubah.
+	Name     *string    `json:"name"`
+	StartsAt *time.Time `json:"startsAt"`
+	EndsAt   *time.Time `json:"endsAt"`
+}
+
+// updateEvent menangani PATCH /v1/cashback/events/{eventId}.
+func (h *cashbackHandler) updateEvent(w http.ResponseWriter, r *http.Request) {
+	var body updateEventBody
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Name == nil && body.StartsAt == nil && body.EndsAt == nil {
+		writeError(w, apierr.Unprocessable("empty_update", "Tidak ada yang diubah"))
+		return
+	}
+
+	ev, err := h.cashback.UpdateEvent(r.Context(), r.PathValue("eventId"), service.UpdateEventInput{
+		Name:     body.Name,
+		StartsAt: body.StartsAt,
+		EndsAt:   body.EndsAt,
 	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newCashbackEvent(ev, time.Now().UTC()))
+}
+
+// removeEvent menangani DELETE /v1/cashback/events/{eventId} — hanya untuk
+// event yang belum mulai.
+func (h *cashbackHandler) removeEvent(w http.ResponseWriter, r *http.Request) {
+	if err := h.cashback.DeleteEvent(r.Context(), r.PathValue("eventId")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listEvents menangani GET /v1/cashback/events — event aktif dan mendatang.
@@ -298,13 +399,7 @@ func (h *cashbackHandler) listEvents(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	out := make([]cashbackEventDTO, 0, len(events))
 	for _, ev := range events {
-		out = append(out, cashbackEventDTO{
-			EventID:  ev.EventID,
-			Name:     ev.Name,
-			StartsAt: ev.StartsAt,
-			EndsAt:   ev.EndsAt,
-			Active:   ev.Active(now),
-		})
+		out = append(out, newCashbackEvent(ev, now))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }

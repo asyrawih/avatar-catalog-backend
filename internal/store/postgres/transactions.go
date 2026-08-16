@@ -128,6 +128,48 @@ func (s *Transactions) ListByUser(ctx context.Context, userID int64, after *pagi
 	return transactions, hasMore, nil
 }
 
+// List mengembalikan transaksi seluruh pemain, terbaru dulu. Bentuk keyset-nya
+// sama persis dengan ListByUser, jadi cursor dari kedua daftar itu punya arti
+// yang sama.
+func (s *Transactions) List(ctx context.Context, after *paging.KeysetCursor, limit int) ([]model.Transaction, bool, error) {
+	var (
+		cursorAt time.Time
+		cursorID string
+	)
+	if after != nil {
+		cursorAt, cursorID = after.At, after.ID
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT`+txColumns+`
+		FROM transaction
+		WHERE ($1::timestamptz IS NULL
+		       OR occurred_at < $1
+		       OR (occurred_at = $1 AND tx_id > $2))
+		ORDER BY occurred_at DESC, tx_id ASC
+		LIMIT $3`,
+		nullableTime(after, cursorAt), cursorID, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+
+	transactions, err := collectTransactions(rows, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+
+	transactions, hasMore := trimPage(transactions, limit)
+
+	refs := make([]*model.Transaction, 0, len(transactions))
+	for i := range transactions {
+		refs = append(refs, &transactions[i])
+	}
+	if err := s.attachItems(ctx, refs); err != nil {
+		return nil, false, err
+	}
+	return transactions, hasMore, nil
+}
+
 // attachItems mengisi Items untuk sekumpulan transaksi dengan satu query.
 func (s *Transactions) attachItems(ctx context.Context, transactions []*model.Transaction) error {
 	if len(transactions) == 0 {

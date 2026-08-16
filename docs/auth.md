@@ -37,8 +37,9 @@ memberi penyerang satu pun token yang bisa dipakai.
 | `dashboard` | `catalog:read` `transactions:read` `cashback:read` `cashback:admin` | Tool internal tim |
 | `ai` | `catalog:read` `transactions:read` | Pengambil data latih |
 | `public-read` | `catalog:read` | Calon API publik |
+| `keys-admin` | `keys:admin` | Menerbitkan dan mencabut kunci lewat `/v1/keys` |
 
-Dua pembagian yang paling penting, dan keduanya dijaga test:
+Tiga pembagian yang paling penting, dan ketiganya dijaga test:
 
 - **Game server tidak punya `cashback:admin`.** Menuntaskan redeem dan menarik
   cashback adalah jalur uang keluar. Kunci game server yang bocor tidak bisa
@@ -48,6 +49,12 @@ Dua pembagian yang paling penting, dan keduanya dijaga test:
   sebuah kunci berkata "saya sedang bertindak atas nama pemain 627278822" lewat
   header `X-User-Id`. Kunci dashboard atau AI yang bocor tetap tidak bisa
   menyukai, membuat outfit, atau menukar cashback atas nama siapa pun.
+
+- **`keys:admin` berdiri sendiri.** Pemegangnya bisa mencetak kunci dengan
+  scope apa pun — termasuk `keys:admin` lagi — jadi ia setara akses penuh ke
+  seluruh API. Karena itu ia tidak ikut di role lain mana pun, termasuk
+  `dashboard`: kunci yang dipakai tool yang menyala terus tidak boleh sekaligus
+  bisa mencetak kredensial baru.
 
 Scope juga bisa dipilih satu per satu kalau role bawaan tidak pas:
 
@@ -221,3 +228,122 @@ Dua batasnya yang perlu diketahui:
 - **Audit log penulisan.** Yang tercatat sekarang baru `last_used_at` per kunci
   dan nama kunci di log akses. Untuk API publik, penulisan sebaiknya punya
   jejaknya sendiri.
+
+## Login dashboard
+
+Operator dashboard tidak memakai kunci API. Mereka login dengan email dan kata
+sandi, lalu membawa sesi lewat cookie:
+
+| Endpoint | Fungsi |
+|---|---|
+| `POST /v1/auth/login` | Tukar email + kata sandi dengan sesi |
+| `POST /v1/auth/logout` | Matikan sesi; idempoten |
+| `GET /v1/auth/me` | Operator dan waktu kedaluwarsa sesi berjalan |
+| `GET`/`POST /v1/auth/users` | Daftar dan tambah operator (butuh `keys:admin`) |
+| `PATCH /v1/auth/users/{userId}` | Ganti email, nama, kata sandi, atau nonaktifkan |
+| `DELETE /v1/auth/users/{userId}` | Hapus operator beserta sesinya |
+
+Ketiga yang pertama TIDAK butuh kredensial apa pun — `login` justru yang
+menerbitkannya, dan `me`/`logout` harus tetap menjawab rapi saat sesi sudah
+mati.
+
+Operator pertama dibuat lewat CLI:
+
+```bash
+go run ./cmd/dashboarduser create --email you@contoh.com --name "Nama Kamu"
+go run ./cmd/dashboarduser list
+go run ./cmd/dashboarduser disable <userId>
+go run ./cmd/dashboarduser passwd <userId>
+```
+
+Kata sandi ditanyakan lewat stdin atau diambil dari `DASHBOARD_PASSWORD` —
+tidak pernah lewat argumen, karena argumen ikut tercatat di riwayat shell dan
+terlihat di daftar proses.
+
+**Sesi membawa SELURUH scope**, termasuk `keys:admin` dan `actor:assert`.
+Dashboard dipakai tim internal yang memang mengurus semuanya, jadi sesi yang
+dibajak setara akses penuh. Kalau suatu saat ingin dipersempit, tempatnya satu:
+`auth.SessionScopes` di `internal/auth/session.go`.
+
+Beberapa keputusan yang menahan kerusakan kalau ada yang salah:
+
+- **Kata sandi dihash argon2id**, bukan SHA-256 seperti token kunci API. Token
+  256 bit acak tidak bisa ditebak dari kamus, jadi memperlambatnya sia-sia;
+  kata sandi manusia sebaliknya. Minimal 12 karakter, tanpa aturan komposisi —
+  panjang menambah entropi sungguhan, aturan "harus ada angka dan simbol"
+  hanya mendorong variasi yang bisa ditebak.
+- **Sesi disimpan di Postgres, bukan JWT tanpa state.** Logout harus benar-benar
+  mematikan sesi dan menonaktifkan operator harus langsung berlaku; keduanya
+  mustahil dengan token yang cuma diverifikasi tanda tangannya. Yang tersimpan
+  hash tokennya, sama seperti kunci API.
+- **Token sesi hanya ada di cookie `HttpOnly`, tidak pernah di body.** Token
+  yang bisa dibaca JavaScript halaman berarti satu XSS cukup untuk mencurinya.
+  Di produksi cookie-nya bernama `__Host-acb_session` dengan `Secure` — awalan
+  itu membuat browser menolaknya kalau ada subdomain yang mencoba menuliskannya.
+- **`SameSite=Lax`,** karena dashboard memanggil API lewat origin yang sama
+  (proxy dev server Vite di lokal, rewrite Vercel di produksi). Cookie yang
+  tidak ikut di request lintas situs tidak bisa dipakai CSRF dari situs lain.
+- **Email tidak terdaftar, kata sandi salah, dan akun dinonaktifkan dijawab
+  sama persis** (`401 invalid_credentials`), dan kata sandi tetap dihash walau
+  email-nya tidak ada supaya lama balasannya tidak membedakan keduanya. Tanpa
+  itu, halaman login jadi alat untuk memastikan email siapa saja yang punya
+  akses.
+- **Menghapus akun sendiri ditolak** (`409 cannot_delete_self`). Bukan karena
+  berbahaya bagi data, melainkan karena hasilnya membingungkan: sesi pemanggil
+  mati di tengah request yang ia kira berhasil, dan kalau ia operator terakhir,
+  tidak ada lagi yang bisa masuk untuk membuat penggantinya. Ganti email tidak
+  memutus sesi — sesi terikat pada `userId`, bukan alamat surat.
+- **Ganti kata sandi dan nonaktifkan operator sama-sama mematikan seluruh sesi
+  orang itu.** Mengganti kata sandi adalah yang dilakukan orang saat curiga
+  akunnya dipakai orang lain, dan itu percuma kalau sesi si penyusup tetap
+  hidup.
+
+Yang menahan tebakan kata sandi bukan pembatas request melainkan argon2id-nya
+sendiri: satu verifikasi memakan 19 MiB dan dua iterasi. Kalau login dibuka ke
+internet luas, tambahkan pembatas per-IP di ingress.
+
+Skema tabelnya ada di [db/init/006_dashboard_user.sql](../db/init/006_dashboard_user.sql).
+Untuk database yang sudah berisi, jalankan sendiri:
+
+```bash
+psql "$DATABASE_URL" -f db/init/006_dashboard_user.sql
+```
+
+## Mengelola kunci lewat HTTP
+
+Selain CLI, kunci bisa dikelola lewat API — inilah yang dipakai halaman
+**Kunci API** di dashboard:
+
+| Endpoint | Fungsi |
+|---|---|
+| `GET /v1/keys` | Daftar kunci beserta status, scope, dan pemakaian terakhir |
+| `GET /v1/keys/roles` | Role, seluruh scope yang dikenali, dan batas masa berlaku |
+| `POST /v1/keys` | Terbitkan kunci; token utuh ada di balasan, sekali |
+| `PATCH /v1/keys/{keyId}` | Ganti nama atau geser masa berlaku |
+| `DELETE /v1/keys/{keyId}` | Cabut kunci; `?hard=true` menghapus barisnya |
+
+Semuanya butuh `keys:admin`. Dua hal sengaja dibedakan dari CLI:
+
+- **`expiresInHours` wajib, maksimal 365 hari.** CLI boleh menerbitkan kunci
+  tanpa masa berlaku; jalur HTTP tidak. Kunci yang lahir dari sesi browser
+  lebih mudah dibajak, dan yang paling membatasi kerusakannya adalah kunci itu
+  mati sendiri. Kunci abadi tetap bisa dibuat, tapi harus lewat CLI di mesin
+  yang memegang `DATABASE_URL`.
+- **`role` dan `scopes` tidak boleh dikirim bersamaan** (`422
+  ambiguous_scopes`). Menerima keduanya berarti harus memilih mana yang menang,
+  dan pilihan itu tidak akan sama dengan yang dibayangkan pemanggil.
+
+`DELETE` mencabut, bukan menghapus baris: riwayat pemakaian kunci yang dicabut
+justru yang paling dibutuhkan saat menelusuri insiden. Mencabut dua kali bukan
+error. `?hard=true` menghapus barisnya sungguhan — untuk kunci yang salah
+dibuat dan tidak pernah dipakai, bukan untuk mematikan kunci yang beredar.
+
+**`PATCH` tidak bisa mengubah scope.** Kunci yang beredar dengan izin yang
+diam-diam bertambah adalah eskalasi yang tidak terlihat dari sisi pemakainya;
+menaikkan izin harus lewat penerbitan kunci baru, yang tokennya berganti dan
+pemiliknya sadar menerimanya. Yang bisa diubah hanya nama dan masa berlaku, dan
+masa berlaku baru dihitung dari saat PATCH, bukan dari waktu penerbitan.
+
+Deployment yang tidak mau jalur penerbitan kredensial terbuka lewat HTTP sama
+sekali bisa membiarkan `httpapi.Deps.APIKeys` nil; seluruh rute `/v1/keys` ikut
+hilang dan manajemen kunci kembali hanya lewat CLI.
