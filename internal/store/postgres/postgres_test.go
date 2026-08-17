@@ -153,6 +153,59 @@ func TestOutfitTulisLaluBaca(t *testing.T) {
 	}
 }
 
+// CreateBatch menulis banyak outfit dalam satu transaksi. Yang diuji di sini:
+// semuanya benar-benar tersimpan lengkap dengan itemnya, baris PLAYER tetap
+// terpenuhi walau satu batch berisi dua pemain berbeda, dan kegagalan di
+// tengah batch tidak meninggalkan separuh baris.
+func TestOutfitCreateBatch(t *testing.T) {
+	pool := newPool(t)
+	outfits := postgres.NewOutfits(pool)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	batch := []model.Outfit{
+		sampleOutfit("otf_batch1", "550e8400-e29b-41d4-a716-446655440000", now),
+		sampleOutfit("otf_batch2", "6ba7b810-9dad-11d1-80b4-00c04fd430c8", now),
+		sampleOutfit("otf_batch3", "6ba7b811-9dad-11d1-80b4-00c04fd430c8", now),
+	}
+	// Pemain kedua yang belum punya baris PLAYER sama sekali.
+	batch[2].UserID = 999888777
+
+	if err := outfits.CreateBatch(ctx, batch); err != nil {
+		t.Fatalf("CreateBatch() error = %v", err)
+	}
+
+	for _, want := range batch {
+		got, err := outfits.Get(ctx, want.OutfitID)
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", want.OutfitID, err)
+		}
+		if got.ReferenceID != want.ReferenceID || got.UserID != want.UserID {
+			t.Errorf("outfit %s = (%s, %d), ingin (%s, %d)",
+				want.OutfitID, got.ReferenceID, got.UserID, want.ReferenceID, want.UserID)
+		}
+		if len(got.Items) != 2 {
+			t.Errorf("outfit %s punya %d item, ingin 2", want.OutfitID, len(got.Items))
+		}
+		if got.Body == nil || got.Body.Scales == nil {
+			t.Errorf("outfit %s kehilangan body", want.OutfitID)
+		}
+	}
+
+	// Satu baris cacat — referenceId kembar dengan yang sudah tersimpan —
+	// membatalkan seluruh batch, bukan menyisakan yang sempat masuk.
+	gagal := []model.Outfit{
+		sampleOutfit("otf_batch4", "7ba7b810-9dad-11d1-80b4-00c04fd430c8", now),
+		sampleOutfit("otf_batch5", batch[0].ReferenceID, now),
+	}
+	if err := outfits.CreateBatch(ctx, gagal); err == nil {
+		t.Fatal("CreateBatch() dengan referenceId kembar berhasil, ingin error")
+	}
+	if _, err := outfits.Get(ctx, "otf_batch4"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("otf_batch4 tetap tersimpan setelah batch gagal (err = %v)", err)
+	}
+}
+
 // Outfit tanpa body harus tersimpan sebagai NULL dan terbaca kembali sebagai
 // nil — bukan objek berisi nol yang terbaca seperti data sungguhan.
 func TestOutfitTanpaBody(t *testing.T) {

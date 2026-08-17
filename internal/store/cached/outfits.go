@@ -49,6 +49,16 @@ func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
 	return nil
 }
 
+// CreateBatch meneruskan penulisan lalu membatalkan seluruh cache outfit —
+// sekali untuk seluruh batch, bukan sekali per outfit.
+func (s *Outfits) CreateBatch(ctx context.Context, outfits []model.Outfit) error {
+	if err := s.inner.CreateBatch(ctx, outfits); err != nil {
+		return err
+	}
+	s.invalidateAll(ctx)
+	return nil
+}
+
 // Get mengembalikan outfit, lewat cache bila tersedia.
 func (s *Outfits) Get(ctx context.Context, outfitID string) (model.Outfit, error) {
 	key := s.versionedKey(ctx, "row", outfitID)

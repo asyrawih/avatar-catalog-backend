@@ -288,6 +288,26 @@ func (s *Outfits) Get(ctx context.Context, outfitID string) (model.Outfit, error
 // Create membuat outfit baru. Backend yang membangkitkan referenceId, karena
 // nilai itulah yang dikirim ke RegisterItemAsync — bukan outfitId internal.
 func (s *Outfits) Create(ctx context.Context, in CreateOutfitInput) (model.Outfit, error) {
+	outfit, err := s.buildNewOutfit(ctx, in)
+	if err != nil {
+		return model.Outfit{}, err
+	}
+
+	if err := s.outfits.Create(ctx, outfit); err != nil {
+		return model.Outfit{}, err
+	}
+	s.embedNameAsync(outfit.OutfitID, outfit.Name)
+	return outfit, nil
+}
+
+// buildNewOutfit memeriksa muatan dan menyusun baris outfit yang siap ditulis,
+// tanpa menulisnya. Dipakai bersama oleh Create dan CreateBatch supaya satu
+// outfit divalidasi dengan aturan yang persis sama, mau dikirim sendirian
+// maupun dalam batch.
+//
+// Satu-satunya efek sampingnya adalah pendaftaran rig lewat ensureTemplate —
+// lihat komentar di sana.
+func (s *Outfits) buildNewOutfit(ctx context.Context, in CreateOutfitInput) (model.Outfit, error) {
 	if in.UserID <= 0 {
 		return model.Outfit{}, apierr.Unprocessable("missing_user_id", "Field userId wajib diisi")
 	}
@@ -333,11 +353,6 @@ func (s *Outfits) Create(ctx context.Context, in CreateOutfitInput) (model.Outfi
 	if outfit.Items == nil {
 		outfit.Items = []model.OutfitItem{}
 	}
-
-	if err := s.outfits.Create(ctx, outfit); err != nil {
-		return model.Outfit{}, err
-	}
-	s.embedNameAsync(outfit.OutfitID, outfit.Name)
 	return outfit, nil
 }
 

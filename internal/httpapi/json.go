@@ -41,20 +41,37 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // writeError menulis err sebagai amplop error. Error yang bukan *apierr.Error
 // dianggap bug internal dan tidak pernah bocor ke klien.
 func writeError(w http.ResponseWriter, err error) {
-	var apiErr *apierr.Error
-	if !errors.As(err, &apiErr) {
-		slog.Error("error tak tertangani", "err", err)
-		apiErr = apierr.New(http.StatusInternalServerError, "internal_error", "Terjadi kesalahan di sisi server")
-	}
+	apiErr := asAPIError(err)
 
 	if apiErr.RetryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(apiErr.RetryAfter))
 	}
-	writeJSON(w, apiErr.Status, errorEnvelope{Error: errorBody{
+	writeJSON(w, apiErr.Status, errorEnvelope{Error: *newErrorBody(err)})
+}
+
+// newErrorBody menyusun bagian dalam amplop error, tanpa menulisnya. Dipakai
+// balasan yang memuat banyak kegagalan sekaligus — mis. hasil per-outfit di
+// POST /v1/outfits:batch — supaya bentuk error di sana sama persis dengan
+// error tunggal di endpoint lain.
+func newErrorBody(err error) *errorBody {
+	apiErr := asAPIError(err)
+	return &errorBody{
 		Code:    apiErr.Code,
 		Message: apiErr.Message,
 		Details: apiErr.Details,
-	}})
+	}
+}
+
+// asAPIError menerjemahkan error apa pun menjadi *apierr.Error. Yang bukan
+// error API dicatat sebagai bug dan diganti pesan generik — isinya bisa memuat
+// detail internal yang tidak boleh sampai ke klien.
+func asAPIError(err error) *apierr.Error {
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) {
+		slog.Error("error tak tertangani", "err", err)
+		return apierr.New(http.StatusInternalServerError, "internal_error", "Terjadi kesalahan di sisi server")
+	}
+	return apiErr
 }
 
 // decodeJSON membaca body JSON ke dst. Field tak dikenal ditolak supaya salah

@@ -224,14 +224,15 @@ Redis dikosongkan.
 
 ## Endpoint
 
-Postman collection lengkapnya ada di [postman/](postman) — 34 request, sudah
-diuji lewat `newman` terhadap server sungguhan (34/34 request, 43/43 assertion
+Postman collection lengkapnya ada di [postman/](postman) — 35 request, sudah
+diuji lewat `newman` terhadap server sungguhan (35/35 request, 46/46 assertion
 lulus). Variabel `outfitId`/`txId`/`cursor` terisi otomatis antar request.
 
 | Method | Path | Keterangan |
 | --- | --- | --- |
 | GET | `/v1/outfits?userId=&isPublic=&q=&outfitId=&sort=&limit=&cursor=` | Daftar outfit beserta itemnya; `sort=recent` (bawaan) / `mostLiked` / `mostViewed`, semua penyaring opsional |
 | POST | `/v1/outfits` | Buat outfit beserta `body` avatar; backend membangkitkan `referenceId` |
+| POST | `/v1/outfits:batch` | Buat sampai 20 outfit sekaligus dalam satu transaksi — lihat [Impor massal](#impor-massal) |
 | GET | `/v1/outfits/{outfitId}` | Detail outfit beserta item |
 | PATCH | `/v1/outfits/{outfitId}` | Ubah sebagian metadata, termasuk simpan `recoItemId` |
 | PUT | `/v1/outfits/{outfitId}/items` | Ganti seluruh isi item |
@@ -258,6 +259,59 @@ lulus). Variabel `outfitId`/`txId`/`cursor` terisi otomatis antar request.
 | GET / POST | `/v1/cashback/events` | Lihat / jadwalkan jendela bonus event |
 | GET | `/v1/cashback/reconciliation?from=&to=` | Agregat ledger (Robux) untuk rekonsiliasi periodik |
 | GET | `/healthz`, `/readyz` | Probe kesehatan |
+
+## Impor massal
+
+`POST /v1/outfits:batch` membuat sampai 20 outfit dalam satu permintaan. Tiap
+elemen `outfits` berbentuk **sama persis** dengan body `POST /v1/outfits`, jadi
+importer yang sudah ada tinggal mengelompokkan muatannya.
+
+```bash
+curl -X POST localhost:8080/v1/outfits:batch \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: impor-2026-08-17-01' \
+  -d '{"outfits":[
+        {"userId":627278822,"templateId":"88484288792766","name":"Y2K Streetwear",
+         "items":[{"assetId":78872304386489,"slot":"Hair"}]},
+        {"userId":627278822,"templateId":"88484288792766","name":"Hero Jacket",
+         "items":[{"assetId":14433369343,"slot":"Jacket"}]}
+      ]}'
+```
+
+```json
+{
+  "created": 2,
+  "failed": 0,
+  "results": [
+    {"index": 0, "outfitId": "otf_a1b2c3", "referenceId": "…", "createdAt": "…"},
+    {"index": 1, "outfitId": "otf_d4e5f6", "referenceId": "…", "createdAt": "…"}
+  ]
+}
+```
+
+Yang perlu diketahui:
+
+- **Muatan cacat tidak menjatuhkan batch.** Outfit yang lolos tetap tersimpan;
+  yang ditolak muncul di `results` sebagai `{"index": n, "error": {...}}` dengan
+  kode error yang sama dengan `POST /v1/outfits`. Importer 120 outfit tahu
+  persis baris mana yang harus diperbaiki tanpa membelah batch sendiri.
+- **Status mengikuti hasil:** `201` kalau semuanya tersimpan, `200` kalau
+  sebagian, `422` kalau tidak ada satu pun yang lolos. Bentuk body-nya sama di
+  ketiganya — `results` yang menjelaskan.
+- **Penulisannya tetap semua-atau-tidak.** Outfit yang lolos ditulis dalam satu
+  transaksi, jadi kegagalan database tidak meninggalkan batch separuh jadi.
+- **`Idempotency-Key` berlaku untuk seluruh batch.** Retry dengan kunci yang
+  sama memutar ulang balasan pertama (`idempotentReplay: true`), bukan membuat
+  20 outfit lagi.
+- Batasnya 20 outfit per permintaan (`too_many_outfits`, `413`); batch kosong
+  ditolak sebagai `empty_batch`.
+
+Yang membuatnya cepat bukan cuma berkurangnya jumlah permintaan HTTP: seluruh
+batch berangkat ke Postgres sebagai satu rangkaian perintah dalam satu
+transaksi, bukan satu perjalanan per baris. Diukur terhadap Postgres lokal, 20
+outfit (2 item masing-masing) memakan ~81 ms lewat `POST /v1/outfits` satu per
+satu dan ~8 ms lewat batch — sekitar 10x, dan selisihnya melebar pada jaringan
+yang latensinya lebih tinggi daripada localhost.
 
 ## Like dan view
 

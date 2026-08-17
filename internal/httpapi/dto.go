@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/hanan/avatar-catalog-backend/internal/model"
@@ -32,6 +33,68 @@ type resolveEnvelope struct {
 	Total      int      `json:"total"`
 	TotalPages int      `json:"totalPages"`
 	NotFound   []string `json:"notFound"`
+}
+
+// --- batch create ---------------------------------------------------------
+
+// batchCreateEnvelope adalah balasan POST /v1/outfits:batch.
+//
+// created dan failed dihitungkan di sini supaya importer tidak perlu menyapu
+// results hanya untuk tahu apakah semuanya lolos.
+type batchCreateEnvelope struct {
+	Created int              `json:"created"`
+	Failed  int              `json:"failed"`
+	Results []batchResultDTO `json:"results"`
+}
+
+// batchResultDTO adalah nasib satu outfit di dalam batch. Persis satu di antara
+// outfitId dan error yang terisi; index selalu ada dan menunjuk posisi di
+// daftar yang klien kirim.
+type batchResultDTO struct {
+	Index       int        `json:"index"`
+	OutfitID    string     `json:"outfitId,omitempty"`
+	ReferenceID string     `json:"referenceId,omitempty"`
+	RecoItemID  any        `json:"recoItemId,omitempty"`
+	CreatedAt   *time.Time `json:"createdAt,omitempty"`
+	Error       *errorBody `json:"error,omitempty"`
+}
+
+func newBatchCreateEnvelope(results []service.BatchOutfitResult) batchCreateEnvelope {
+	env := batchCreateEnvelope{Results: make([]batchResultDTO, 0, len(results))}
+
+	for _, r := range results {
+		row := batchResultDTO{Index: r.Index}
+		if r.Created() {
+			createdAt := r.Outfit.CreatedAt
+			row.OutfitID = r.Outfit.OutfitID
+			row.ReferenceID = r.Outfit.ReferenceID
+			row.RecoItemID = nullableString(r.Outfit.RecoItemID)
+			row.CreatedAt = &createdAt
+			env.Created++
+		} else {
+			row.Error = newErrorBody(r.Err)
+			env.Failed++
+		}
+		env.Results = append(env.Results, row)
+	}
+	return env
+}
+
+// batchStatus menerjemahkan hasil batch menjadi status HTTP: 201 kalau semua
+// tersimpan, 200 kalau sebagian, 422 kalau tidak ada yang lolos.
+//
+// Balasannya tetap berbentuk batchCreateEnvelope walau statusnya 422 — yang
+// menjelaskan kegagalannya adalah error per-outfit di results, dan
+// membungkusnya jadi satu error tunggal justru membuang keterangan itu.
+func batchStatus(env batchCreateEnvelope) int {
+	switch {
+	case env.Created == 0:
+		return http.StatusUnprocessableEntity
+	case env.Failed == 0:
+		return http.StatusCreated
+	default:
+		return http.StatusOK
+	}
 }
 
 // --- outfit ---------------------------------------------------------------

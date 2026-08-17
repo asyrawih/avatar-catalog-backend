@@ -90,6 +90,13 @@ type createOutfitBody struct {
 	ThumbnailAssetID int64 `json:"thumbnailAssetId"`
 }
 
+// batchCreateOutfitBody adalah muatan POST /v1/outfits:batch. Tiap elemen
+// outfits berbentuk sama persis dengan body POST /v1/outfits, jadi klien yang
+// sudah bisa membuat satu outfit tidak perlu menyusun ulang muatannya.
+type batchCreateOutfitBody struct {
+	Outfits []createOutfitBody `json:"outfits"`
+}
+
 type updateOutfitBody struct {
 	Name       *string   `json:"name"`
 	TemplateID *jsonID   `json:"templateId"`
@@ -342,6 +349,47 @@ func (h *outfitHandler) create(w http.ResponseWriter, r *http.Request) {
 		"recoItemId":  nullableString(outfit.RecoItemID),
 		"createdAt":   outfit.CreatedAt,
 	})
+}
+
+// createBatch menangani POST /v1/outfits:batch.
+//
+// Satu permintaan membawa banyak outfit sekaligus. Yang dihemat bukan hanya
+// jumlah permintaan HTTP-nya: seluruh batch ditulis dalam satu transaksi dan
+// satu perjalanan ke Postgres, jadi impor puluhan outfit tidak lagi membayar
+// latensi per baris.
+//
+// Muatan yang cacat tidak menjatuhkan batch — tiap outfit punya hasil sendiri
+// di results, ditandai index sesuai urutan kiriman. Statusnya mengikuti hasil
+// itu: 201 kalau semuanya tersimpan, 200 kalau sebagian, dan 422 kalau tidak
+// ada satu pun yang lolos.
+func (h *outfitHandler) createBatch(w http.ResponseWriter, r *http.Request) {
+	var body batchCreateOutfitBody
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+
+	inputs := make([]service.CreateOutfitInput, 0, len(body.Outfits))
+	for _, o := range body.Outfits {
+		inputs = append(inputs, service.CreateOutfitInput{
+			UserID:           o.UserID,
+			TemplateID:       o.TemplateID.String(),
+			Name:             o.Name,
+			IsPublic:         o.IsPublic,
+			CustomTags:       o.CustomTags,
+			Items:            toModelItems(o.Items),
+			Body:             toModelBody(o.Body),
+			ThumbnailAssetID: o.ThumbnailAssetID,
+		})
+	}
+
+	results, err := h.outfits.CreateBatch(r.Context(), inputs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	envelope := newBatchCreateEnvelope(results)
+	writeJSON(w, batchStatus(envelope), envelope)
 }
 
 // update menangani PATCH /v1/outfits/{outfitId}.

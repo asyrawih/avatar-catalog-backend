@@ -205,6 +205,24 @@ items.append({
                 "pm.collectionVariables.set('referenceId', d.referenceId);",
                 "pm.test('referenceId dibangkitkan', () => pm.expect(d.referenceId).to.be.a('string'));",
             ]),
+        req("Buat banyak outfit (batch)", "POST", "v1/outfits:batch",
+            desc="Sampai 20 outfit dalam satu permintaan. Tiap elemen `outfits` "
+                 "berbentuk sama persis dengan body Buat outfit.\n\n"
+                 "Muatan cacat tidak menjatuhkan batch: yang lolos tetap tersimpan, "
+                 "yang ditolak muncul di `results` sebagai `{index, error}`. Status "
+                 "mengikuti hasil — 201 semua tersimpan, 200 sebagian, 422 tidak ada "
+                 "yang lolos.\n\nPenulisannya satu transaksi, dan Idempotency-Key "
+                 "berlaku untuk seluruh batch.\n\n"
+                 "Scope: catalog:write (+ actor:assert untuk X-User-Id)",
+            body={"outfits": [outfit_body, dict(outfit_body, name="Hero Jacket Fit")]},
+            headers=AKTOR + IDEMPOTENSI, prerequest=GEN_KEY,
+            tests=[
+                "pm.test('status 201', () => pm.response.to.have.status(201));",
+                "const d = pm.response.json();",
+                "pm.test('semua tersimpan', () => pm.expect(d.failed).to.eql(0));",
+                "pm.test('results sejajar kiriman', () => "
+                "pm.expect(d.results.map(r => r.index)).to.eql([0, 1]));",
+            ]),
         req("Detail outfit", "GET", "v1/outfits/{{outfitId}}",
             desc="Outfit yang sudah di-soft-delete menjawab 410 outfit_deleted, "
                  "bukan 404 — referenceId yang sudah beredar di feed tetap bisa "

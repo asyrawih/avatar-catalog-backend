@@ -92,6 +92,12 @@ type EngagementCounts struct {
 type Outfits interface {
 	// Create menyimpan outfit baru beserta itemnya.
 	Create(ctx context.Context, o model.Outfit) error
+	// CreateBatch menyimpan banyak outfit sekaligus dalam satu transaksi —
+	// semua tersimpan atau tidak sama sekali. Bukan sekadar perulangan
+	// Create: yang mahal pada impor massal bukan INSERT-nya melainkan
+	// perjalanan bolak-balik per baris, dan di sini seluruh batch berangkat
+	// sebagai satu rangkaian perintah.
+	CreateBatch(ctx context.Context, outfits []model.Outfit) error
 	// Get mengembalikan outfit termasuk yang sudah di-soft-delete; pemanggil
 	// yang menentukan apakah itu 404 atau 410.
 	Get(ctx context.Context, outfitID string) (model.Outfit, error)

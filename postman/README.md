@@ -1,7 +1,7 @@
 # Postman collection
 
 ```
-avatar-catalog-api.postman_collection.json    34 request, 8 folder
+avatar-catalog-api.postman_collection.json    35 request, 8 folder
 avatar-catalog-api.postman_environment.json   variabel lingkungan lokal
 build_collection.py                           pembangkit collection
 ```

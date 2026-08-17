@@ -118,6 +118,11 @@ func NewRouter(deps Deps) http.Handler {
 	route(api, "GET /v1/outfits", outfits.list, read)
 	route(api, "POST /v1/outfits", outfits.create, write,
 		idempotent(deps.Idempotency, "outfits.create", false))
+	// Impor massal. Ditulis "outfits:batch", bukan "outfits/batch", supaya
+	// tidak pernah tertukar dengan outfit ber-id "batch" — ini aksi pada
+	// koleksi, bukan anggota koleksi.
+	route(api, "POST /v1/outfits:batch", outfits.createBatch, write,
+		idempotent(deps.Idempotency, "outfits.createBatch", false))
 	route(api, "POST /v1/outfits/resolve", outfits.resolve, read)
 	// Terdaftar sebelum {outfitId} secara makna: mux Go 1.22 memilih pola
 	// literal "search" di atas wildcard, jadi tidak bentrok.

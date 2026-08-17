@@ -343,6 +343,74 @@
           ]
         },
         {
+          "name": "Buat banyak outfit (batch)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}",
+                "description": "Pemain yang diwakili; butuh kunci ber-scope actor:assert"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}",
+                "description": "Dibangkitkan otomatis oleh skrip pre-request"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/outfits:batch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "outfits:batch"
+              ]
+            },
+            "description": "Sampai 20 outfit dalam satu permintaan. Tiap elemen `outfits` berbentuk sama persis dengan body Buat outfit.\n\nMuatan cacat tidak menjatuhkan batch: yang lolos tetap tersimpan, yang ditolak muncul di `results` sebagai `{index, error}`. Status mengikuti hasil — 201 semua tersimpan, 200 sebagian, 422 tidak ada yang lolos.\n\nPenulisannya satu transaksi, dan Idempotency-Key berlaku untuk seluruh batch.\n\nScope: catalog:write (+ actor:assert untuk X-User-Id)",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"outfits\": [\n    {\n      \"userId\": {{userId}},\n      \"templateId\": \"{{templateId}}\",\n      \"name\": \"Y2K Streetwear\",\n      \"isPublic\": true,\n      \"customTags\": [\n        \"category:y2k\",\n        \"gender:male\"\n      ],\n      \"thumbnailAssetId\": 0,\n      \"items\": [\n        {\n          \"assetId\": 78872304386489,\n          \"slot\": \"Hair\",\n          \"name\": \"BLOND BARREL TWISTS DREADS\",\n          \"assetType\": \"HairAccessory\",\n          \"price\": 69\n        },\n        {\n          \"assetId\": 14433369343,\n          \"slot\": \"Jacket\",\n          \"name\": \"Hero Jacket Oni Blood Moon\",\n          \"assetType\": \"Accessory\",\n          \"price\": 79\n        }\n      ],\n      \"body\": {\n        \"colors\": {\n          \"head\": \"AE7C64\",\n          \"torso\": \"AE7C64\",\n          \"leftArm\": \"AE7C64\",\n          \"rightArm\": \"AE7C64\",\n          \"leftLeg\": \"AE7C64\",\n          \"rightLeg\": \"AE7C64\"\n        },\n        \"scales\": {\n          \"height\": 1.05,\n          \"width\": 1,\n          \"head\": 1,\n          \"depth\": 1,\n          \"bodyType\": 1,\n          \"proportion\": 0\n        }\n      }\n    },\n    {\n      \"userId\": {{userId}},\n      \"templateId\": \"{{templateId}}\",\n      \"name\": \"Hero Jacket Fit\",\n      \"isPublic\": true,\n      \"customTags\": [\n        \"category:y2k\",\n        \"gender:male\"\n      ],\n      \"thumbnailAssetId\": 0,\n      \"items\": [\n        {\n          \"assetId\": 78872304386489,\n          \"slot\": \"Hair\",\n          \"name\": \"BLOND BARREL TWISTS DREADS\",\n          \"assetType\": \"HairAccessory\",\n          \"price\": 69\n        },\n        {\n          \"assetId\": 14433369343,\n          \"slot\": \"Jacket\",\n          \"name\": \"Hero Jacket Oni Blood Moon\",\n          \"assetType\": \"Accessory\",\n          \"price\": 79\n        }\n      ],\n      \"body\": {\n        \"colors\": {\n          \"head\": \"AE7C64\",\n          \"torso\": \"AE7C64\",\n          \"leftArm\": \"AE7C64\",\n          \"rightArm\": \"AE7C64\",\n          \"leftLeg\": \"AE7C64\",\n          \"rightLeg\": \"AE7C64\"\n        },\n        \"scales\": {\n          \"height\": 1.05,\n          \"width\": 1,\n          \"head\": 1,\n          \"depth\": 1,\n          \"bodyType\": 1,\n          \"proportion\": 0\n        }\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Kunci baru tiap kirim. Untuk menguji perilaku idempoten, matikan baris",
+                  "// ini lalu kirim dua kali dengan kunci yang sama.",
+                  "pm.collectionVariables.set('idempotencyKey', require('uuid').v4());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json();",
+                  "pm.test('semua tersimpan', () => pm.expect(d.failed).to.eql(0));",
+                  "pm.test('results sejajar kiriman', () => pm.expect(d.results.map(r => r.index)).to.eql([0, 1]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Detail outfit",
           "request": {
             "method": "GET",

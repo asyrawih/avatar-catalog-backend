@@ -57,6 +57,18 @@ func (s *MemoryOutfits) Create(_ context.Context, o model.Outfit) error {
 	return nil
 }
 
+// CreateBatch menyimpan banyak outfit sekaligus. Satu kunci untuk seluruh
+// batch, jadi pembaca tidak pernah melihat batch yang baru terisi separuh.
+func (s *MemoryOutfits) CreateBatch(_ context.Context, outfits []model.Outfit) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, o := range outfits {
+		s.rows[o.OutfitID] = cloneOutfit(o)
+	}
+	return nil
+}
+
 // Get mengembalikan outfit apa adanya, termasuk yang sudah di-soft-delete.
 func (s *MemoryOutfits) Get(_ context.Context, outfitID string) (model.Outfit, error) {
 	s.mu.RLock()

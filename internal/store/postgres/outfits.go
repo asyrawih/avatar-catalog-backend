@@ -58,6 +58,74 @@ func (s *Outfits) Create(ctx context.Context, o model.Outfit) error {
 	})
 }
 
+// CreateBatch menyimpan banyak outfit beserta itemnya dalam satu transaksi.
+//
+// Seluruh batch dikirim sebagai satu pgx.Batch: satu perjalanan ke Postgres
+// untuk semuanya, bukan satu per baris. Di situlah waktunya hilang saat impor
+// massal — bukan pada INSERT-nya, melainkan pada latensi yang berulang.
+//
+// Baris PLAYER didahulukan dan di-dedup, karena satu batch impor biasanya
+// milik satu pemain yang sama; tanpa dedup, ON CONFLICT-nya dijalankan 20 kali
+// untuk hasil yang sama.
+func (s *Outfits) CreateBatch(ctx context.Context, outfits []model.Outfit) error {
+	if len(outfits) == 0 {
+		return nil
+	}
+
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		batch := &pgx.Batch{}
+
+		seenPlayer := make(map[int64]struct{}, len(outfits))
+		for _, o := range outfits {
+			if _, ok := seenPlayer[o.UserID]; ok {
+				continue
+			}
+			seenPlayer[o.UserID] = struct{}{}
+			batch.Queue(`INSERT INTO player (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, o.UserID)
+		}
+
+		for _, o := range outfits {
+			body, err := marshalBody(o.Body)
+			if err != nil {
+				return err
+			}
+			batch.Queue(`
+				INSERT INTO outfit (outfit_id, reference_id, reco_item_id, user_id, template_id,
+				                    name, is_public, custom_tags, body, thumbnail_asset_id,
+				                    created_at, updated_at, deleted_at)
+				VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)`,
+				o.OutfitID, o.ReferenceID, o.RecoItemID, o.UserID, o.TemplateID,
+				o.Name, o.IsPublic, tagsOrEmpty(o.CustomTags), body, nullableInt64(o.ThumbnailAssetID),
+				o.CreatedAt, o.UpdatedAt, o.DeletedAt)
+
+			for _, item := range o.Items {
+				adjust, err := marshalAdjust(item.Adjust)
+				if err != nil {
+					return err
+				}
+				batch.Queue(`
+					INSERT INTO outfit_item (outfit_id, asset_id, slot, name, asset_type, price,
+					                         bundle_id, bundle_name, adjust)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+					o.OutfitID, item.AssetID, item.Slot, item.Name, item.AssetType, item.Price,
+					nullableInt64(item.BundleID), item.BundleName, adjust)
+			}
+		}
+
+		results := tx.SendBatch(ctx, batch)
+		defer results.Close()
+
+		for range batch.Len() {
+			if _, err := results.Exec(); err != nil {
+				return err
+			}
+		}
+		// Ditutup di sini, bukan hanya lewat defer: transaksi tidak boleh
+		// di-commit selagi hasil batch belum habis dibaca.
+		return results.Close()
+	})
+}
+
 // Get mengembalikan outfit apa adanya, termasuk yang sudah di-soft-delete.
 func (s *Outfits) Get(ctx context.Context, outfitID string) (model.Outfit, error) {
 	row := s.pool.QueryRow(ctx, `SELECT`+outfitColumns+` FROM outfit o WHERE o.outfit_id = $1`, outfitID)
