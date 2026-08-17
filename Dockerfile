@@ -17,12 +17,17 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/serve
 #   kubectl exec -it deploy/avatar-catalog-api -- /app/dashboarduser create --email you@contoh.com
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/apikey ./cmd/apikey && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/dashboarduser ./cmd/dashboarduser
+# migrate membawa db/migrations di dalam binernya (go:embed), jadi image ini
+# selalu berisi skema yang cocok dengan kodenya. Dijalankan sebelum server
+# start — initContainer di Kubernetes, service `migrate` di compose.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/server /app/server
 COPY --from=build /out/apikey /app/apikey
 COPY --from=build /out/dashboarduser /app/dashboarduser
+COPY --from=build /out/migrate /app/migrate
 
 ENV PORT=8080
 EXPOSE 8080

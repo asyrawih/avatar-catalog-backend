@@ -47,6 +47,21 @@ services:
       retries: 10
       start_period: 5s
 
+  # Jalan sampai selesai lalu berhenti, sebelum api start. Berkas migrasinya
+  # ikut di dalam image (go:embed), jadi image yang sama membawa kode dan skema
+  # yang cocok. Aman dijalankan berulang: yang sudah tercatat di
+  # schema_migrations dilewati.
+  migrate:
+    build: .
+    entrypoint: ["/app/migrate"]
+    command: ["up"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-avatar}:${POSTGRES_PASSWORD:-avatar_dev_password}@db:5432/${POSTGRES_DB:-avatar_catalog}?sslmode=disable
+
   api:
     build: .
     restart: unless-stopped
@@ -55,6 +70,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # api tidak pernah start di atas skema yang belum dimigrasi. Kalau
+      # migrasinya gagal, `docker compose up` berhenti di sini dengan pesan
+      # dari migrate — bukan dengan api yang menjawab 500 karena kolom hilang.
+      migrate:
+        condition: service_completed_successfully
     environment:
       APP_ENV: ${APP_ENV:-development}
       PORT: "8080"

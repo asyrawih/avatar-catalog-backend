@@ -106,6 +106,49 @@ spec:
               memory: 32Mi
             limits:
               memory: 64Mi
+        # Menerapkan db/migrations sebelum server start. Berkas migrasinya
+        # diembed di image yang sama dengan api, jadi tag ini otomatis ikut
+        # diganti overlay bersama container api — mustahil pod berjalan dengan
+        # kode baru di atas migrasi versi lain.
+        #
+        # Aman meski beberapa pod start bersamaan: runner memegang advisory
+        # lock Postgres dan melewati migrasi yang sudah tercatat, jadi replika
+        # kedua hanya menemukan "skema sudah terkini". Migrasi yang gagal
+        # membuat pod berhenti di Init:Error — api tidak pernah melayani
+        # trafik di atas skema setengah jadi.
+        - name: migrasi
+          image: ghcr.io/asyrawih/avatar-catalog-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/migrate", "up"]
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: avatar-catalog-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: avatar-catalog-secret
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@avatar-catalog-db:5432/$(POSTGRES_DB)?sslmode=disable
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: api
           # Tag diganti per-lingkungan lewat `images:` di overlay.

@@ -1,4 +1,4 @@
-.PHONY: run build test test-integration check fmt vet tidy clean up down logs psql redis-cli db-reset caddy-reload
+.PHONY: run build test test-integration check fmt vet tidy clean up down logs psql redis-cli db-reset caddy-reload migrate migrate-status migrate-baseline
 
 BINARY := bin/server
 
@@ -35,6 +35,21 @@ tidy:
 clean:
 	go clean
 	rm -rf bin
+
+# --- migrasi database ---
+# Menyasar database di docker compose. Untuk database lain, isi DATABASE_URL
+# sendiri: DATABASE_URL=... make migrate-status
+DATABASE_URL ?= postgres://$${POSTGRES_USER:-avatar}:$${POSTGRES_PASSWORD:-avatar_dev_password}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB:-avatar_catalog}?sslmode=disable
+
+migrate:
+	DATABASE_URL="$(DATABASE_URL)" go run ./cmd/migrate up
+
+migrate-status:
+	DATABASE_URL="$(DATABASE_URL)" go run ./cmd/migrate status
+
+# Untuk database yang skemanya sudah terkini — tandai tanpa menjalankan.
+migrate-baseline:
+	DATABASE_URL="$(DATABASE_URL)" go run ./cmd/migrate baseline
 
 # --- docker ---
 

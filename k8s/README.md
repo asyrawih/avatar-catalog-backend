@@ -10,7 +10,7 @@ k8s/
     secret-app.yaml     password Postgres (nilai dev); kunci API TIDAK di sini
     postgres.yaml       StatefulSet pgvector + PVC + Service headless
     redis.yaml          Deployment cache tanpa persistensi + Service
-    api.yaml            Deployment + Service
+    api.yaml            Deployment + Service; initContainer tunggu-postgres + migrasi
     ingress.yaml        pengganti service caddy
   overlays/
     dev/                1 replika, resource kecil, host .localtest.me

@@ -429,33 +429,57 @@ Rollback:
 kubectl -n avatar-catalog rollout undo deploy/avatar-catalog-api
 ```
 
+Migrasi database ikut jalan sendiri di rollout ini — lihat
+[Perubahan skema database](#perubahan-skema-database).
+
 `maxUnavailable: 0` di Deployment, jadi rollout tidak pernah menurunkan
 kapasitas — pod baru harus Ready dulu sebelum yang lama dimatikan. Pakai tag
 versi, bukan `latest`; dengan `latest` perintah rollback tidak punya arti.
 
 ### Perubahan skema database
 
-Skrip `db/init/*.sql` **hanya** dieksekusi saat PGDATA masih kosong — sama
-seperti di docker compose. Database yang sudah berisi tidak akan ikut berubah
-saat kamu deploy versi baru, dan gejalanya adalah api gagal start atau
-menjawab `500` karena kolom yang dicarinya tidak ada.
+Migrasi **berjalan sendiri di setiap deploy**. Deployment api punya
+initContainer `migrasi` yang menjalankan `/app/migrate up` sebelum server
+start, jadi urutannya tidak bisa terbalik: pod baru tidak pernah melayani
+trafik di atas skema lama, dan migrasi yang gagal menahan pod di `Init:Error`
+alih-alih membiarkan api menjawab `500` karena kolom yang hilang.
 
-Terapkan sendiri, berurutan:
+Yang perlu kamu lakukan cuma menulis berkasnya. Konvensi lengkapnya di
+[`db/migrations/README.md`](../db/migrations/README.md); ringkasnya:
+
+1. Buat `db/migrations/NNNN_deskripsi.sql` — tanpa `BEGIN;`/`COMMIT;`, runner
+   yang membungkusnya dalam transaksi.
+2. Ubah juga `db/init/001_schema.sql` supaya database baru langsung lahir
+   dengan bentuk akhir.
+3. Build image, rollout seperti biasa. Selesai.
+
+Cara kerjanya: berkas migrasi diembed ke dalam image (`go:embed`), jadi image
+yang sama membawa kode dan skema yang cocok — dan tag initContainer diganti
+overlay bersama container api, tidak mungkin berbeda versi. Catatan penerapan
+ada di tabel `schema_migrations` di database itu sendiri; migrasi yang sudah
+tercatat dilewati, dan advisory lock Postgres menjaga beberapa replika yang
+start bersamaan tidak menjalankan DDL yang sama dua kali.
+
+Memeriksa atau menjalankan manual — biner `migrate` ikut di dalam image:
 
 ```bash
-for f in db/init/004_engagement.sql db/init/005_api_key.sql; do
-  kubectl -n avatar-catalog exec -i statefulset/avatar-catalog-db -- \
-    psql -U avatar -d avatar_catalog -v ON_ERROR_STOP=1 < "$f"
-done
+kubectl -n avatar-catalog exec deploy/avatar-catalog-api -c api -- /app/migrate status
 ```
 
-`004` dan `005` ditulis idempoten (`IF NOT EXISTS`), jadi aman dijalankan
-berulang dan aman dijalankan pada database yang sudah punya sebagian tabelnya.
-`001`–`003` **tidak** — jangan dijalankan ulang pada database berisi.
+**Database yang skemanya sudah terkini** — produksi yang sudah lama jalan, atau
+database baru yang `db/init`-nya sudah berbentuk akhir — perlu ditandai sekali
+supaya migrasi lama tidak dijalankan percuma:
 
-Urutan yang benar saat merilis versi yang butuh skema baru: terapkan migrasi
-dulu, baru rollout api. Terbalik berarti pod baru berjalan di atas skema lama.
-Kalau nanti sering, tambahkan Job migrasi yang jalan sebelum rollout.
+```bash
+kubectl -n avatar-catalog exec deploy/avatar-catalog-api -c api -- /app/migrate baseline
+```
+
+Lakukan itu **sebelum** menaruh migrasi baru di `db/migrations`, kalau tidak
+migrasi baru itu ikut ditandai tanpa pernah dijalankan.
+
+Berkas `db/migrate_*.sql` di direktori `db/` adalah migrasi manual gaya lama,
+ditinggalkan sebagai catatan sejarah. Semuanya sudah tercermin di
+`db/init/001_schema.sql` — jangan dipindahkan ke `db/migrations/`.
 
 ### Ubah konfigurasi non-rahasia
 
@@ -532,7 +556,7 @@ kubectl -n avatar-catalog port-forward svc/avatar-catalog-db 5432:5432
 | Semua `/v1` **401** | Belum ada kunci API, atau kunci yang dipakai salah/dicabut. `apikey list`; terbitkan dengan 1.8. Ini juga jawaban yang benar untuk request tanpa `Authorization` |
 | **403** `insufficient_scope` | Kunci sah tapi role-nya tidak punya izin itu — mis. kunci `ai` mencoba menulis. Lihat role di `apikey roles` |
 | **403** `actor_assert_forbidden` | Kunci tanpa `actor:assert` mengirim `X-User-Id`. Hanya kunci `game-server` yang boleh bertindak atas nama pemain |
-| Pod `api` **CrashLoopBackOff** setelah upgrade | Skema belum dimigrasi. Terapkan `004`/`005` lalu rollout ulang |
+| Pod `api` **Init:Error** / `Init:CrashLoopBackOff` | Migrasi gagal. `kubectl logs <pod> -c migrasi`. Pesan `drift` berarti berkas migrasi yang sudah diterapkan diedit — tulis migrasi baru, jangan edit yang lama |
 | Sertifikat tidak terbit | `kubectl -n avatar-catalog describe certificate`. Umumnya DNS belum mengarah, atau port 80 tertutup sehingga HTTP-01 gagal |
 | HPA `<unknown>/70%` | metrics-server belum siap. `kubectl -n kube-system get deploy metrics-server` |
 | Data hilang setelah redeploy | PVC ikut terhapus. `kubectl delete -k` **tidak** menghapus PVC dari `volumeClaimTemplates`, tapi `kubectl delete pvc` iya. Cek dulu sebelum menghapus apa pun |

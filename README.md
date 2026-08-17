@@ -155,6 +155,17 @@ mengubah skema jalankan:
 docker compose down -v && docker compose up -d db
 ```
 
+Untuk database yang tidak boleh dikosongkan — produksi, atau lokal yang sudah
+berisi data uji — perubahan skema ditulis sebagai migrasi di
+[db/migrations/](db/migrations/README.md). Migrasi diterapkan otomatis sebelum
+api start (service `migrate` di compose, initContainer di Kubernetes) dan
+tercatat sekali jalan di tabel `schema_migrations`:
+
+```bash
+make migrate-status   # mana yang sudah dan belum diterapkan
+make migrate          # terapkan yang belum
+```
+
 Beberapa aturan API sudah ditegakkan di tingkat skema, bukan hanya di kode:
 `transaction.idempotency_key` unik (retry tidak bisa membuat baris ganda),
 `outfit.reference_id` unik, dan primary key `(outfit_id, asset_id)` pada
@@ -695,6 +706,7 @@ internal/apierr         # amplop error tunggal
 internal/paging         # cursor keyset dan posisi
 internal/idempotency, internal/ratelimit, internal/config
 db/init                 # skema Postgres (ERD v3), cashback, like/view, kunci API + data contoh
+db/migrations           # perubahan skema untuk database berisi, jalan otomatis saat deploy
 roblox                  # modul Luau untuk game server
 ```
 
